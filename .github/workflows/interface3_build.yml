@@ -1,0 +1,58 @@
+name: Build firmware image
+
+on:
+  push:
+    paths:
+      - interface3/**
+      - .github/workflows/interface3_build.yml
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create build timestamp
+        run: echo "TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
+
+      - name: Checkout firmware
+        uses: actions/checkout@v3
+
+      - name: Checkout micropython
+        uses: actions/checkout@v3
+        with:
+          repository: hanshuebner/micropython
+          ref: rp2-dma
+          path: ./micropython
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential python3 git gcc-arm-none-eabi
+
+      - name: Build MicroPython cross compiler
+        working-directory: micropython
+        run: make -C mpy-cross
+
+      - name: Clean and fetch submodules
+        working-directory: micropython/ports/rp2
+        run: make BOARD=PICO_W submodules && make BOARD=PICO_W clean
+
+      - name: Cache firmware build
+        uses: actions/cache@v3
+        with:
+          path: micropython
+          key: micropython
+
+      - name: Copy firmware files into MicroPython build
+        run: cp interface3/*.py micropython/ports/rp2/modules/
+
+      - name: Build firmware
+        working-directory: micropython/ports/rp2
+        run: make BOARD=PICO_W
+
+      - name: Rename firmware image
+        working-directory: micropython/ports/rp2/build-PICO_W
+        run: mv firmware.uf2 coax-interface3-${{ env.TIMESTAMP }}.uf2
+
+      - name: Upload firmware image
+        uses: actions/upload-artifact@v3
+        with:
+          name: coax-interface3-${{ env.TIMESTAMP }}
+          path: micropython/ports/rp2/build-PICO_W/coax-interface3-${{ env.TIMESTAMP }}.uf2

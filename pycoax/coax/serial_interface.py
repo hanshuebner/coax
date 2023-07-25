@@ -30,6 +30,9 @@ class SerialInterface(Interface):
         self.legacy_firmware_detected = None
         self.legacy_firmware_version = None
 
+    def identifier(self):
+        return self.serial.port
+
     def reset(self):
         """Reset the interface."""
         original_serial_timeout = self.serial.timeout

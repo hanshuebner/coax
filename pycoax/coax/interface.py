@@ -12,6 +12,7 @@ class Interface:
     """3270 coax interface."""
 
     def __init__(self):
+        self.legacy_firmware_detected = None
         self.features = set()
 
     def reset(self):
