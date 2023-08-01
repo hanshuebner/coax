@@ -11,8 +11,7 @@ from contextlib import contextmanager
 from serial import Serial, SerialException
 from sliplib import SlipWrapper, ProtocolError
 
-from .interface import Interface, InterfaceFeature, FrameFormat
-from .protocol import pack_data_word
+from .interface import Interface, InterfaceFeature, normalize_frame
 from .exceptions import InterfaceError, InterfaceTimeout, ReceiveError, ReceiveTimeout
 
 class SerialInterface(Interface):
@@ -185,43 +184,14 @@ def open_serial_interface(serial_port, reset=True):
         yield interface
 
 def _pack_transmit_receive_message(address, frame, response_length, timeout_milliseconds):
-    message = bytes([0x06])
+    # Convert the three frame formats to a simple list of 10-bit words with
+    # a repeat count and offset.
+    (words, repeat_count, repeat_offset) = normalize_frame(frame)
 
-    repeat_count = 0
-    repeat_offset = 0
     bytes_ = bytearray()
 
-    if frame[0] == FrameFormat.WORDS:
-        if isinstance(frame[1], tuple):
-            repeat_count = frame[1][1]
-
-            for word in frame[1][0]:
-                bytes_ += struct.pack('<H', word)
-        else:
-            for word in frame[1]:
-                bytes_ += struct.pack('<H', word)
-    elif frame[0] == FrameFormat.WORD_DATA:
-        bytes_ += struct.pack('<H', frame[1])
-
-        if len(frame) > 2:
-            if isinstance(frame[2], tuple):
-                repeat_offset = 1
-                repeat_count = frame[2][1]
-
-                for byte in frame[2][0]:
-                    bytes_ += struct.pack('<H', pack_data_word(byte))
-            else:
-                for byte in frame[2]:
-                    bytes_ += struct.pack('<H', pack_data_word(byte))
-    elif frame[0] == FrameFormat.DATA:
-        if isinstance(frame[1], tuple):
-            repeat_count = frame[1][1]
-
-            for byte in frame[1][0]:
-                bytes_ += struct.pack('<H', pack_data_word(byte))
-        else:
-            for byte in frame[1]:
-                bytes_ += struct.pack('<H', pack_data_word(byte))
+    for word in words:
+        bytes_ += struct.pack('<H', word)
 
     if address is not None:
         if address < 0 or address > 63:
@@ -232,6 +202,7 @@ def _pack_transmit_receive_message(address, frame, response_length, timeout_mill
 
         bytes_ = struct.pack('<H', 0x8000 | address) + bytes_
 
+    message = bytes([0x06])
     message += struct.pack('>H', (repeat_offset << 15) | repeat_count)
     message += bytes_
     message += struct.pack('>HH', response_length, timeout_milliseconds)
