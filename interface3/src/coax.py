@@ -6,10 +6,14 @@ import struct
 from time import sleep, ticks_ms
 from machine import Pin
 
-PIN_XMIT = 2
+PIN_TX = 2
 PIN_DELAY = 3
-PIN_RECV = 12
+PIN_TX_ACTIVE = 4
+PIN_RX = 12
 PIN_TEST = 13
+
+PIN_LED_ERROR = 10
+PIN_LED_STATUS = 11
 
 dma = rp2.DMA()
 
@@ -136,12 +140,12 @@ def recv_serial():
     set(pins, 0)
 
 recv = rp2.StateMachine(1, recv_serial, freq=12 * BIT_RATE,
-                        in_base=Pin(PIN_RECV), jmp_pin=Pin(PIN_RECV),
+                        in_base=Pin(PIN_RX), jmp_pin=Pin(PIN_RX),
                         set_base=Pin(PIN_TEST))
 xmit = rp2.StateMachine(7, xmit_serial, freq=12 * BIT_RATE,
-                        out_base=Pin(PIN_XMIT), set_base=Pin(PIN_XMIT))
+                        out_base=Pin(PIN_TX), set_base=Pin(PIN_TX))
 xmit_delay = rp2.StateMachine(6, xmit_serial_delay, freq=12 * BIT_RATE,
-                              in_base=Pin(PIN_XMIT), set_base=Pin(PIN_DELAY))
+                              in_base=Pin(PIN_TX), set_base=Pin(PIN_DELAY))
 
 
 @micropython.viper
