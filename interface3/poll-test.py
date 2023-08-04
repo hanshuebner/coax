@@ -8,7 +8,9 @@ from coax.protocol import FrameFormat
 def poll(url):
     with open_http_interface(url) as interface:
         while True:
-            responses = interface._transmit_receive([(None, [FrameFormat.DATA, [1]])], [2], 1)
+            responses = interface._transmit_receive(outbound_frames=[(None, [FrameFormat.DATA, [1]])],
+                                                    response_lengths=[2],
+                                                    timeout=1)
             print(responses[0], end="")
             sys.stdout.flush()
 
