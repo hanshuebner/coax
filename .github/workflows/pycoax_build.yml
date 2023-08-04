@@ -14,9 +14,9 @@ jobs:
         working-directory: pycoax
     name: Build
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Set up Python 3.8
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: 3.8
       - name: Install dependencies
@@ -31,7 +31,7 @@ jobs:
       - name: Build packages
         run: python -m build
       - name: Attach packages
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: dist
           path: pycoax/dist/
