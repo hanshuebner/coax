@@ -1,0 +1,6 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "library")(type "Legacy")(uri "${KIPRJMOD}/library.lib")(options "")(descr ""))
+  (lib (name "pcb-rescue")(type "KiCad")(uri "${KIPRJMOD}/pcb-rescue.kicad_sym")(options "")(descr ""))
+  (lib (name "rpi-pico")(type "KiCad")(uri "/Users/hans/Development/privat/KiCad-RP-Pico/RP-Pico Libraries/MCU_RaspberryPi_and_Boards.kicad_sym")(options "")(descr ""))
+)
