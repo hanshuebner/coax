@@ -7,8 +7,8 @@ from time import sleep, ticks_ms
 from machine import Pin
 
 PIN_TX = 2
-PIN_DELAY = 3
-PIN_TX_ACTIVE = 4
+PIN_TX_ACTIVE = 3
+PIN_DELAY = 4
 PIN_RX = 12
 PIN_TEST = 13
 
@@ -42,7 +42,8 @@ TRANSACT_TIMEOUT_MS = 1_000
 
 
 @rp2.asm_pio(out_shiftdir=rp2.PIO.SHIFT_LEFT,
-             out_init=rp2.PIO.OUT_LOW, set_init=rp2.PIO.OUT_LOW,
+             out_init=rp2.PIO.OUT_LOW,
+             set_init=(rp2.PIO.OUT_LOW, rp2.PIO.OUT_LOW),
              fifo_join=rp2.PIO.JOIN_TX)
 def xmit_serial():
     pull()
@@ -51,13 +52,13 @@ def xmit_serial():
     # generate 5 sync bits
     set(x, 4)
     label("sync")
-    set(pins, 1)[5]
-    set(pins, 0)[4]
+    set(pins, 0b11)[5]
+    set(pins, 0b10)[4]
     jmp(x_dec, "sync")
     # generate start pulse pattern (1/2 bit zero already into it)
     set(x, 23)  # initialize bit counter for first word
     nop()[10]
-    set(pins, 1)[13]
+    set(pins, 0b11)[13]
     # transmit word
     label("bit_loop_delay")
     nop()[3]
@@ -70,10 +71,10 @@ def xmit_serial():
     jmp(y_dec, "bit_loop_nodelay")
     label("end_of_frame")
     nop()[2]
-    set(pins, 1)[5]
-    set(pins, 0)[5]
-    set(pins, 1)[23]
-    set(pins, 0)
+    set(pins, 0b11)[5]
+    set(pins, 0b10)[5]
+    set(pins, 0b11)[23]
+    set(pins, 0b00)
 
 
 # xmit_serial_delay() generates the delayed TX signal required to generate the correct analog signal
