@@ -85,6 +85,8 @@ def normalize_frame(frame):
             words += [pack_data_word(byte) for byte in frame[1][0]]
         else:
             words += [pack_data_word(byte) for byte in frame[1]]
+    else:
+        raise ValueError("unrecognized frame format")
 
     return (words, repeat_count, repeat_offset)
 

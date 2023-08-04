@@ -41,7 +41,7 @@ jobs:
           key: micropython
 
       - name: Copy firmware files into MicroPython build
-        run: cp interface3/*.py micropython/ports/rp2/modules/
+        run: cp interface3/src/*.py micropython/ports/rp2/modules/
 
       - name: Build firmware
         working-directory: micropython/ports/rp2
