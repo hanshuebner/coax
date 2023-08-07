@@ -6,14 +6,14 @@ import struct
 from time import sleep, ticks_ms
 from machine import Pin
 
-PIN_TX = 2
-PIN_TX_ACTIVE = 3
-PIN_DELAY = 4
-PIN_RX = 12
-PIN_TEST = 13
+PIN_RX = 2
+PIN_TX = 3
+PIN_TX_ACTIVE = 4
+PIN_TX_DELAY = 5
+PIN_TEST = 6
 
-PIN_LED_ERROR = 10
-PIN_LED_STATUS = 11
+PIN_LED_ERROR = 7
+PIN_LED_STATUS = 8
 
 dma = rp2.DMA()
 
@@ -56,8 +56,7 @@ def xmit_serial():
     set(pins, 0b10)[4]
     jmp(x_dec, "sync")
     # generate start pulse pattern (1/2 bit zero already into it)
-    set(x, 23)  # initialize bit counter for first word
-    nop()[10]
+    set(x, 23)[11]  # initialize bit counter for first word
     set(pins, 0b11)[13]
     # transmit word
     label("bit_loop_delay")
@@ -75,7 +74,6 @@ def xmit_serial():
     set(pins, 0b10)[5]
     set(pins, 0b11)[23]
     set(pins, 0b00)
-
 
 # xmit_serial_delay() generates the delayed TX signal required to generate the correct analog signal
 # on the coax line
@@ -97,26 +95,29 @@ def xmit_serial_delay():
              set_init=rp2.PIO.OUT_LOW,
              fifo_join=rp2.PIO.JOIN_RX)
 def recv_serial():
+    # wait for end of transmission
+    wait(1, pin, 2)
+    wait(0, pin, 2)
     label("start_frame")
-    wait(1, pin, 0)[7] # wait for quiescent bit
+    wait(1, pin, 0)[6] # wait for quiescent bit
     jmp(pin, "start_frame")
     wait(1, pin, 0)
-    wait(0, pin, 0)[2]  # wait for falling edge
-    jmp(pin, "start_frame")[3]  # expect zero half bit
-    jmp(pin, "start_frame")[3]  # expect zero half bit
     set(pins, 1)
     set(pins, 0)
+    wait(0, pin, 0)[2]  # wait for falling edge
     jmp(pin, "start_frame")[5]  # expect zero half bit
-    jmp(pin, "one")[4]
+    jmp(pin, "start_frame")[5]  # expect zero half bit
+    jmp(pin, "start_frame")[5]  # expect zero half bit
+    jmp(pin, "one")[5]
     jmp("start_frame")
     label("one")
-    jmp(pin, "two")[4]
+    jmp(pin, "two")[5]
     jmp("start_frame")
     label("two")
     jmp(pin, "three")
     jmp("start_frame")
     label("three")
-    set(pins, 1)[5]
+    set(pins, 1)[1]
     set(x, 9)  # 10 bits to read
     # we are 1/4 bit into the sync/end bit
     label("word_loop")
@@ -146,7 +147,7 @@ recv = rp2.StateMachine(1, recv_serial, freq=12 * BIT_RATE,
 xmit = rp2.StateMachine(7, xmit_serial, freq=12 * BIT_RATE,
                         out_base=Pin(PIN_TX), set_base=Pin(PIN_TX))
 xmit_delay = rp2.StateMachine(6, xmit_serial_delay, freq=12 * BIT_RATE,
-                              in_base=Pin(PIN_TX), set_base=Pin(PIN_DELAY))
+                              in_base=Pin(PIN_TX), set_base=Pin(PIN_TX_DELAY))
 
 
 @micropython.viper
@@ -192,28 +193,26 @@ def encode_tx_buf(tx_buf):
     return tx_encoded
 
 
-def demo():
+def demo(word=18):
     """
     Non-DMA demo:  Send 2 words and receive them, FIFO provides buffering
     """
+    ret = []
     recv.active(1)
     xmit_delay.active(0)
     xmit.active(0)
-    xmit.put(1)  # frame length - 1
-    xmit.put(manchester_encode_word(1))
-    xmit.put(manchester_encode_word(23))
+    xmit.put(0)  # frame length - 1
+    xmit.put(manchester_encode_word(word))
 
     xmit_delay.active(1)
     xmit.active(1)
     expected = 1
     while True:
         received = recv.get()
+        ret.append(received)
         if received & 0xff000000:
             break
-        elif received == expected:
-            expected = 23
-        else:
-            raise Exception("unexpected response")
+    return ret
 
 
 def setup_tx_dma(buf):

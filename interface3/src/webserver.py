@@ -29,8 +29,8 @@ def handle_request(method, path, content_length, body):
         return 200, "OK", {"Content-Type": "application/octet-stream"}, rx_buf
 
     if method == 'POST' and path == '/demo':
-        coax.demo()
-        return 200, "OK", {"Content-Type": "text/plain"}, "DEMO EXECUTED"
+        result = coax.demo()
+        return 200, "OK", {"Content-Type": "text/plain"}, "DEMO EXECUTED: " + str(result)
 
     return 404, "Not found", {"Content-Type": "text/plain"}, "The requested resource was not found"
 

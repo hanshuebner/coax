@@ -7,7 +7,7 @@ then
     wifi_name=$(/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I | perl -ne '/^\s*SSID: (.*)\n/ && print $1')
     echo "You will be asked for an administrator account name and password so that your WiFi password can be retrieved."
     echo "Cancel to enter password manually."
-    wifi_password=$(security find-generic-password -ga $wifi_name 2>&1 | perl -ne '/^password: "(.*)"/ && print $1')
+    wifi_password=$(security find-generic-password -ga "$wifi_name" 2>&1 | perl -ne '/^password: "(.*)"/ && print $1')
 fi
 
 if [ "$wifi_password" = "" ]
@@ -36,7 +36,7 @@ fi
 old_config=$(mktemp)
 new_config=$(mktemp)
 trap "rm -f $old_config $new_config" 0
-if mpremote ls | grep ' config.json'
+if mpremote ls | grep -q ' config.json'
 then
     mpremote cp --no-verbose :config.json $old_config
 else
