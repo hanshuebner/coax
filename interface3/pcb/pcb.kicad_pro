@@ -48,8 +48,21 @@
           "min_clearance": 0.508
         }
       },
-      "diff_pair_dimensions": [],
-      "drc_exclusions": [],
+      "diff_pair_dimensions": [
+        {
+          "gap": 0.0,
+          "via_gap": 0.0,
+          "width": 0.0
+        }
+      ],
+      "drc_exclusions": [
+        "silk_edge_clearance|125396893|77860000|196a96c5-04d8-4279-bc12-138a188dd88b|78834633-1512-45e7-9ae0-da0fece6f724",
+        "silk_edge_clearance|125396893|77860000|196a96c5-04d8-4279-bc12-138a188dd88b|96a2d711-6aae-4c2a-84ae-b2ed916dc948",
+        "silk_edge_clearance|140396893|77860000|196a96c5-04d8-4279-bc12-138a188dd88b|0242b050-75b3-4514-9e13-9bdede5ee92a",
+        "starved_thermal|138724393|113535000|4623c1db-a993-45ec-8c4d-1bdc91b5d9f7|2487b05a-1e38-4f52-8b6c-f7b7ef41e8af|F.Cu",
+        "starved_thermal|142534393|113535000|4623c1db-a993-45ec-8c4d-1bdc91b5d9f7|ea8c44bb-8a79-48b1-9661-bf18841bf051|F.Cu",
+        "starved_thermal|170776893|110322000|4623c1db-a993-45ec-8c4d-1bdc91b5d9f7|b6cb39d9-85c1-4cc8-8d47-5851531da46d|F.Cu"
+      ],
       "meta": {
         "filename": "board_design_settings.json",
         "version": 2
@@ -113,8 +126,8 @@
         "min_copper_edge_clearance": 0.049999999999999996,
         "min_hole_clearance": 0.25,
         "min_hole_to_hole": 0.25,
-        "min_microvia_diameter": 0.0,
-        "min_microvia_drill": 0.0,
+        "min_microvia_diameter": 0.19999999999999998,
+        "min_microvia_drill": 0.09999999999999999,
         "min_resolved_spokes": 2,
         "min_silk_clearance": 0.0,
         "min_text_height": 0.7999999999999999,
@@ -436,6 +449,23 @@
         "via_diameter": 0.6858,
         "via_drill": 0.3302,
         "wire_width": 6
+      },
+      {
+        "bus_width": 12,
+        "clearance": 0.1524,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.6858,
+        "microvia_drill": 0.3302,
+        "name": "Power",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.508,
+        "via_diameter": 1.3716,
+        "via_drill": 0.6604,
+        "wire_width": 6
       }
     ],
     "meta": {
@@ -449,7 +479,7 @@
         "pattern": "+1V2"
       },
       {
-        "netclass": "Default",
+        "netclass": "Power",
         "pattern": "+3V3"
       },
       {
@@ -457,7 +487,7 @@
         "pattern": "COAX_IRQ"
       },
       {
-        "netclass": "Default",
+        "netclass": "Power",
         "pattern": "GND"
       },
       {
