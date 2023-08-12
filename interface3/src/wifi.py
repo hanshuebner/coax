@@ -2,11 +2,16 @@ import network
 import time
 from machine import Pin, Timer
 
-led = Pin("LED", Pin.OUT)
+PIN_LED_WIFI = 9
+
+# We operate both the Pico and the externally connected LED.
+led1 = Pin("LED", Pin.OUT)
+led2 = Pin(PIN_LED_WIFI, Pin.OUT)
 
 def blink(timer):
-    global led
-    led.toggle()
+    global led1, led2
+    led1.toggle()
+    led2.toggle()
 
 
 def connect(network_name, password):
@@ -24,6 +29,8 @@ def connect(network_name, password):
         if status == old_status:
             continue
         elif status == -1:
+            led1.off()
+            led2.off()
             break
         elif status == 1:
             print("Connecting to WiFi network", network_name)
@@ -33,12 +40,13 @@ def connect(network_name, password):
             info = wlan.ifconfig()
             print("IP address:", info[0])
             connected = True
+            led1.on()
+            led2.on()
             break
         old_status = status
         time.sleep(0.5)
 
     timer.deinit()
-    led.off()
 
     if not connected:
         print("Connection failed")
