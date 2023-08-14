@@ -21,12 +21,16 @@ def send_response(client, status, status_string, header, body=None):
 
 HEADER_SPLIT_RE = re.compile(": *")
 
-def handle_request(method, path, content_length, body):
+def handle_request(method, path, content_length, header, body):
     if method == 'POST' and path == '/transact':
         if content_length is None or (content_length % 1) == 1 or content_length == 0:
             return 400, "Bad request", {"Content-Type": "text/plain"}, "Invalid Content-Length header, needs to be even number of bytes"
-        rx_buf = coax.transact(body)
-        return 200, "OK", {"Content-Type": "application/octet-stream"}, rx_buf
+        try:
+            timeout = int(header['x-3270-timeout']) if 'x-3270-timeout' in header else 1000
+            rx_buf = coax.transact(body, timeout=timeout)
+            return 200, "OK", {"Content-Type": "application/octet-stream"}, rx_buf
+        except coax.Timeout:
+            return 408, "Request Timeout", {"Content-Type": "text/plain"}, "The request timed out"
 
     if method == 'POST' and path == '/demo':
         result = coax.demo()
@@ -47,17 +51,19 @@ def handle_client(client):
         # Read request header
         content_length = None
         connection_header = None
+        header = {}
         body = None
         while True:
             line = client_file.readline()
             if not line or line == b'\r\n':
                 break
-            header, value = HEADER_SPLIT_RE.split(str(line, 'ascii')[:-2], 1)
-            header = header.lower()
-            if header == 'content-length':
+            key, value = HEADER_SPLIT_RE.split(str(line, 'ascii')[:-2], 1)
+            key = key.lower()
+            if key == 'content-length':
                 content_length = int(value)
-            elif header == 'connection':
+            elif key == 'connection':
                 connection_header = value
+            header[key] = value
 
         # Read request body, if any
         if content_length is not None:
@@ -73,7 +79,7 @@ def handle_client(client):
         print(method, path, content_length)
 
         try:
-            status, status_string, headers, body = handle_request(method, path, content_length, body)
+            status, status_string, headers, body = handle_request(method, path, content_length, header, body)
             send_response(client, status, status_string, headers, body)
 
         except Exception as e:

@@ -29,6 +29,9 @@ MAX_FRAME_LENGTH = 80 * 25 + 16
 # Maximum time to wait for a response from the terminal
 TRANSACT_TIMEOUT_MS = 1_000
 
+class Timeout(Exception):
+    pass
+
 
 # xmit_serial: First word in FIFO defines frame length - 1 (i.e. 0 for
 # 1 word). Every word to be transmitted is put in FIFO in manchester
@@ -52,12 +55,12 @@ def xmit_serial():
     # generate 5 sync bits
     set(x, 4)
     label("sync")
-    set(pins, 0b11)[5]
-    set(pins, 0b10)[4]
+    set(pins, 0b10)[5]
+    set(pins, 0b11)[4]
     jmp(x_dec, "sync")
     # generate start pulse pattern (1/2 bit zero already into it)
     set(x, 23)[11]  # initialize bit counter for first word
-    set(pins, 0b11)[13]
+    set(pins, 0b10)[13]
     # transmit word
     label("bit_loop_delay")
     nop()[3]
@@ -70,9 +73,9 @@ def xmit_serial():
     jmp(y_dec, "bit_loop_nodelay")
     label("end_of_frame")
     nop()[2]
-    set(pins, 0b11)[5]
     set(pins, 0b10)[5]
-    set(pins, 0b11)[23]
+    set(pins, 0b11)[5]
+    set(pins, 0b10)[23]
     set(pins, 0b00)
 
 # xmit_serial_delay() generates the delayed TX signal required to generate the correct analog signal
@@ -81,9 +84,9 @@ def xmit_serial():
 @rp2.asm_pio(set_init=rp2.PIO.OUT_LOW)
 def xmit_serial_delay():
     wait(1, pin, 0)
-    set(pins, 1)
-    wait(0, pin, 0)
     set(pins, 0)
+    wait(0, pin, 0)
+    set(pins, 1)
 
 
 # recv_serial() receives and decodes frames, so there is no need for additional decoding of
@@ -157,16 +160,16 @@ def manchester_encode_word(value: uint) -> uint:
     eight bits to the right so that the resulting 32 bit value can be left shifted onto the
     coax interface.
     """
-    parity = uint(0)
-    encoded = uint(0b01)  # start bit
+    parity = uint(1)
+    encoded = uint(0b10)  # start bit
     mask = uint(0x200)  # mask for current bit
     for _ in range(10):
         encoded <<= 2
         if value & mask:
-            encoded |= 0b01
+            encoded |= 0b10
             parity += 1
         else:
-            encoded |= 0b10
+            encoded |= 0b01
         mask >>= 1
     encoded <<= 2
     if parity & 1:
@@ -264,7 +267,7 @@ def setup_rx_dma(buf):
     recv.active(1)
 
 
-def transact(tx_buf):
+def transact(tx_buf, timeout=TRANSACT_TIMEOUT_MS):
     """
     Perform a DMA send/receive operation
     :param tx_buf: bytearray with words to send
@@ -283,7 +286,7 @@ def transact(tx_buf):
     # Wait for response
     start = ticks_ms()
     receive_count = -1
-    while receive_count == -1 and ticks_ms() - start < TRANSACT_TIMEOUT_MS:
+    while receive_count == -1 and ticks_ms() - start < timeout:
         # Try to find end of frame marker in DMA buffer
         for i in range(0, MAX_FRAME_LENGTH * 2, 2):
             if struct.unpack("<H", rx_buf[i:i + 2])[0] == 0xffff:
@@ -311,6 +314,6 @@ def transact(tx_buf):
     if receive_count == -1:
         print("tx", tx_buf[:32])
         print("rx", rx_buf[:32])
-        raise RuntimeError('Timeout waiting for reply')
+        raise Timeout()
 
     return rx_buf[0:receive_count]
