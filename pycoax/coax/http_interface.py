@@ -46,13 +46,14 @@ class HttpInterface(Interface):
             if address is not None:
                 headers['X-Station-Address'] = str(address)
             try:
+                headers['X-3270-Timeout'] = str(int(timeout * 1000))
                 response = self.session.post(self.url,
                                              data=message,
-                                             headers=headers,
-                                             timeout=timeout)
-
+                                             headers=headers)
                 if response.status_code == 200:
                     responses.append(_decode_frame(response.content))
+                elif response.status_code == 408:
+                    responses.append(ReceiveTimeout())
                 else:
                     responses.append(ReceiveError('HTTP status code %d: %s' % (response.status_code, str(response.content, 'ascii'))))
             except requests.exceptions.Timeout:

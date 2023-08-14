@@ -3,6 +3,7 @@ import unittest
 from functools import partial
 from queue import Queue
 
+import coax
 from coax import HttpInterface, Poll, ReceiveTimeout
 from tests import http_server
 
@@ -62,6 +63,40 @@ class HttpTimeoutTest(unittest.TestCase):
     def test_timeout_is_raised(self):
         with self.assertRaises(ReceiveTimeout):
             self.interface.execute(Poll(), timeout=0.1)
+
+
+class TransactTimeoutTest(unittest.TestCase):
+    class HttpHandler(http_server.RequestHandler):
+        def do_POST(self):
+            content_length = int(self.headers.get('Content-Length', -1))
+            if content_length == -1:
+                return self.respond(400, 'Missing Content-Length header')
+
+            if content_length % 2 != 0 or content_length < 2:
+                return self.respond(400, 'Invalid content length (%d)' % content_length)
+
+            # Read the request body
+            _ = self.rfile.read(content_length)
+
+            response_body = b"request timed out"
+            self.respond(408, response_body, headers={
+                'Content-Type': 'text/plain',
+                'Content-Length': str(len(response_body)),
+                'Connection': 'keep-alive',
+            })
+
+    def setUp(self) -> None:
+        self.httpd = http_server.run(handler_class=TransactTimeoutTest.HttpHandler, port=0)
+        port = self.httpd.socket.getsockname()[1]
+        self.interface = HttpInterface('http://127.0.0.1:{0}/transact'.format(port))
+
+    def tearDown(self) -> None:
+        self.interface.close()
+        self.httpd.server_close()
+
+    def test_timeout_is_raised(self):
+        with self.assertRaises(ReceiveTimeout):
+            self.interface.execute(Poll())
 
 
 if __name__ == '__main__':
