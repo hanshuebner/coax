@@ -46,7 +46,8 @@ class HttpInterface(Interface):
             if address is not None:
                 headers['X-Station-Address'] = str(address)
             try:
-                headers['X-3270-Timeout'] = str(int(timeout * 1000))
+                if timeout is not None:
+                    headers['X-3270-Timeout'] = str(int(timeout * 1000))
                 response = self.session.post(self.url,
                                              data=message,
                                              headers=headers)

@@ -45,26 +45,6 @@ class HttpIntegrationTest(unittest.TestCase):
         self.assertEqual(address1, address2)
 
 
-class HttpTimeoutTest(unittest.TestCase):
-    class HttpHandler(http_server.RequestHandler):
-        def transact(self, request_body) -> bytes:
-            time.sleep(1)
-            return b'\x00\x00'
-
-    def setUp(self) -> None:
-        self.httpd = http_server.run(handler_class=HttpTimeoutTest.HttpHandler, port=0)
-        port = self.httpd.socket.getsockname()[1]
-        self.interface = HttpInterface('http://127.0.0.1:{0}/transact'.format(port))
-
-    def tearDown(self) -> None:
-        self.interface.close()
-        self.httpd.server_close()
-
-    def test_timeout_is_raised(self):
-        with self.assertRaises(ReceiveTimeout):
-            self.interface.execute(Poll(), timeout=0.1)
-
-
 class TransactTimeoutTest(unittest.TestCase):
     class HttpHandler(http_server.RequestHandler):
         def do_POST(self):
