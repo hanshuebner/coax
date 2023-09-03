@@ -113,7 +113,7 @@ def recv_serial():
     jmp(pin, "vio10")[5]
     jmp("start0")
     label("vio10")
-    jmp(pin, "vio11")[5]
+    jmp(pin, "vio11")[4]
     jmp("start0")
     label("vio11")
     jmp(pin, "vio12")
@@ -121,9 +121,13 @@ def recv_serial():
     label("vio12")
     set(pins, 0b11)
     set(x, 9)  # 10 bits to read
+    # wait for the beginning of the sync bit
+    wait(0, pin, 0)
     # we are 1/4 bit into the sync/end bit
     label("word_loop")
-    jmp(pin, "end_frame")[17]
+    jmp(pin, "end_frame")
+    # sync on the rising edge of the sync bit
+    wait(1, pin, 0)[12]
     # we are 3/4 bits into the first data bit
     label("bit_loop")
     in_(pins, 1)  # read bit, wait for next
