@@ -12,8 +12,8 @@ PIN_TX_ACTIVE = 4
 PIN_TX_DELAY = 5
 PIN_TEST = 6
 
-PIN_LED_TX = 7
-PIN_LED_RX = 8
+PIN_LED_RX = 7
+PIN_LED_TX = 8
 
 dma = rp2.DMA()
 
@@ -95,32 +95,31 @@ def xmit_serial_delay():
 
 @rp2.asm_pio(in_shiftdir=rp2.PIO.SHIFT_LEFT,
              autopush=True, push_thresh=10,
-             set_init=rp2.PIO.OUT_LOW,
+             set_init=(rp2.PIO.OUT_LOW, rp2.PIO.OUT_LOW),
              fifo_join=rp2.PIO.JOIN_RX)
 def recv_serial():
     # wait for end of transmission
     wait(1, pin, 2)
     wait(0, pin, 2)
-    label("start_frame")
-    wait(1, pin, 0)[6] # wait for quiescent bit
-    jmp(pin, "start_frame")
-    wait(1, pin, 0)
-    set(pins, 1)
-    set(pins, 0)
-    wait(0, pin, 0)[2]  # wait for falling edge
-    jmp(pin, "start_frame")[5]  # expect zero half bit
-    jmp(pin, "start_frame")[5]  # expect zero half bit
-    jmp(pin, "start_frame")[5]  # expect zero half bit
-    jmp(pin, "one")[5]
-    jmp("start_frame")
-    label("one")
-    jmp(pin, "two")[5]
-    jmp("start_frame")
-    label("two")
-    jmp(pin, "three")
-    jmp("start_frame")
-    label("three")
-    set(pins, 1)[1]
+    label("start0")
+    wait(1, pin, 0) # wait for quiescent bit
+    label("start1")
+    wait(0, pin, 0)
+    set(pins, 0b01)
+    set(pins, 0b00)
+    jmp(pin, "start1")[3]  # expect zero half bit
+    jmp(pin, "start1")[5]  # expect zero half bit
+    jmp(pin, "start1")[5]  # expect zero half bit
+    jmp(pin, "vio10")[5]
+    jmp("start0")
+    label("vio10")
+    jmp(pin, "vio11")[5]
+    jmp("start0")
+    label("vio11")
+    jmp(pin, "vio12")
+    jmp("start0")
+    label("vio12")
+    set(pins, 0b11)
     set(x, 9)  # 10 bits to read
     # we are 1/4 bit into the sync/end bit
     label("word_loop")
@@ -128,8 +127,8 @@ def recv_serial():
     # we are 3/4 bits into the first data bit
     label("bit_loop")
     in_(pins, 1)  # read bit, wait for next
-    set(pins, 0)
-    set(pins, 1)[8]
+    set(pins, 0b10)
+    set(pins, 0b11)[8]
     jmp(x_dec, "bit_loop")
     # looking at the parity bit now
     mov(x, pins)[3]
@@ -142,7 +141,7 @@ def recv_serial():
     push()
     label("wait_idle")
     jmp(pin, "wait_idle")
-    set(pins, 0)
+    set(pins, 0b00)
 
 recv = rp2.StateMachine(1, recv_serial, freq=12 * BIT_RATE,
                         in_base=Pin(PIN_RX), jmp_pin=Pin(PIN_RX),
@@ -312,8 +311,52 @@ def transact(tx_buf, timeout=TRANSACT_TIMEOUT_MS):
     assert devs.DMA_CHANS[TX_DMA_CHAN].CTRL_TRIG.EN == 0
 
     if receive_count == -1:
-        print("tx", tx_buf[:32])
-        print("rx", rx_buf[:32])
         raise Timeout()
+
+    print('rx: ', rx_buf[0:receive_count])
+
+    return rx_buf[0:receive_count]
+
+def receive():
+    """
+    Perform a DMA receive operation
+    :param tx_buf: bytearray with words to send
+    """
+
+    # Set up receive buffer, one extra word for the end marker (0xffff)
+    rx_buf = bytearray(MAX_FRAME_LENGTH * 2 + 2)
+
+    # Initiate DMA transfers
+    setup_rx_dma(rx_buf)
+
+    # Manually toggle TX_ACTIVE to unblock receiver
+    tx_active = Pin(PIN_TX_ACTIVE, Pin.OUT)
+    tx_active.on()
+    tx_active.off()
+
+    # Wait for response
+    start = ticks_ms()
+    receive_count = -1
+    while receive_count == -1:
+        # Try to find end of frame marker in DMA buffer
+        for i in range(0, MAX_FRAME_LENGTH * 2, 2):
+            if struct.unpack("<H", rx_buf[i:i + 2])[0] == 0xffff:
+                receive_count = i
+                break
+        sleep(0.001)
+
+    # Disable state machines
+    recv.active(0)
+
+    # Abort DMA
+    devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.EN = 0
+    devs.DMA_DEVICE.CHAN_ABORT = DMA_CHAN_MASK
+    while devs.DMA_DEVICE.CHAN_ABORT != 0:
+        pass
+
+    assert devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.BUSY == 0
+    assert devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.EN == 0
+
+    print('rx ', receive_count, ': ', rx_buf[0:receive_count])
 
     return rx_buf[0:receive_count]

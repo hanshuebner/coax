@@ -196,6 +196,17 @@ void setup()
 
 void loop()
 {
+#if 1
+    uint16_t buf[0x3ff+1];
+    uint16_t count = 0xff;
+    for (uint16_t i = 0; i < count; i++) {
+        buf[i] = i;
+    }
+    for (uint16_t i = 0; i < 0x3ff; i++) {
+        CoaxTransceiver::transmit(buf, count);
+        delay(100);
+    }
+#else
     if (Serial.available() > 0) {
         uint8_t byte = Serial.read();
 
@@ -229,4 +240,5 @@ void loop()
             frameState = DATA;
         }
     }
+#endif
 }
