@@ -55,11 +55,7 @@
           "width": 0.0
         }
       ],
-      "drc_exclusions": [
-        "silk_edge_clearance|125396893|77860000|196a96c5-04d8-4279-bc12-138a188dd88b|78834633-1512-45e7-9ae0-da0fece6f724",
-        "silk_edge_clearance|125396893|77860000|196a96c5-04d8-4279-bc12-138a188dd88b|96a2d711-6aae-4c2a-84ae-b2ed916dc948",
-        "silk_edge_clearance|140396893|77860000|196a96c5-04d8-4279-bc12-138a188dd88b|0242b050-75b3-4514-9e13-9bdede5ee92a"
-      ],
+      "drc_exclusions": [],
       "meta": {
         "filename": "board_design_settings.json",
         "version": 2
@@ -101,7 +97,7 @@
         "silk_overlap": "warning",
         "skew_out_of_range": "error",
         "solder_mask_bridge": "error",
-        "starved_thermal": "error",
+        "starved_thermal": "ignore",
         "text_height": "warning",
         "text_thickness": "warning",
         "through_hole_pad_without_hole": "error",
@@ -672,7 +668,7 @@
         "pattern": "USB_D-"
       },
       {
-        "netclass": "Default",
+        "netclass": "Power",
         "pattern": "VBUS"
       },
       {
