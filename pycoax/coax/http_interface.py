@@ -51,6 +51,7 @@ class HttpInterface(Interface):
                 response = self.session.post(self.url,
                                              data=message,
                                              headers=headers)
+#                print(f'status {response.status_code} headers {response.headers} body {response.content}')
                 if response.status_code == 200:
                     responses.append(_decode_frame(response.content))
                 elif response.status_code == 408:

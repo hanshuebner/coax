@@ -3,7 +3,7 @@
 set -e
 
 mpremote reset
-sleep 1
+sleep 3
 mpremote cp src/*.py :
 mpremote exec "import main"
 mpremote repl

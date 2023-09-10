@@ -242,7 +242,9 @@ def setup_tx_dma(buf):
 
     dma_chan.CTRL_TRIG.EN = 1
 
+    xmit_delay.restart()
     xmit_delay.active(1)
+    xmit.restart()
     xmit.active(1)
 
 
@@ -267,6 +269,7 @@ def setup_rx_dma(buf):
 
     dma_chan.CTRL_TRIG.EN = 1
 
+    recv.restart()
     recv.active(1)
 
 
