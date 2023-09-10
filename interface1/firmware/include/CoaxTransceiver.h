@@ -23,12 +23,12 @@ class CoaxTransceiver {
 public:
     static void setup();
     static int /* ssize_t */ transmitReceive(uint16_t *transmitBuffer, size_t transmitBufferCount, uint16_t *receiveBuffer, size_t receiveBufferSize, uint16_t receiveTimeout);
-    static int /* ssize_t */ transmit(uint16_t *buffer, size_t bufferCount);
 
 private:
     static void dataBusSetup();
     static void rxSetup();
     static void txSetup();
+    static int /* ssize_t */ transmit(uint16_t *buffer, size_t bufferCount);
     static int /* ssize_t */ receive(uint16_t *buffer, size_t bufferSize, uint16_t timeout);
     static void rxActiveInterrupt();
 
