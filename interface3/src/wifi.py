@@ -1,12 +1,11 @@
 import network
 import time
+from leds import leds
 from machine import Pin, Timer
-
-PIN_LED_WIFI = 9
 
 # We operate both the Pico and the externally connected LED.
 led1 = Pin("LED", Pin.OUT)
-led2 = Pin(PIN_LED_WIFI, Pin.OUT)
+led2 = leds['NET']
 
 def blink(timer):
     global led1, led2
