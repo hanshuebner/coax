@@ -4,6 +4,7 @@ import gc
 from machine import Pin, Timer
 import wifi
 import coax
+from leds import leds
 
 PORT = 80 # port to listen on for http requests
 
@@ -28,8 +29,10 @@ def handle_request(method, path, content_length, header, body):
         try:
             timeout = int(header['x-3270-timeout']) if 'x-3270-timeout' in header else 1000
             rx_buf = coax.transact(body, timeout=timeout)
+            leds['ERR'].off()
             return 200, "OK", {"Content-Type": "application/octet-stream"}, rx_buf
         except coax.Timeout:
+            leds['ERR'].on()
             return 408, "Request Timeout", {"Content-Type": "text/plain"}, "The request timed out"
 
     if method == 'POST' and path == '/demo':
@@ -48,6 +51,7 @@ def handle_client(client):
             # connection closed
             break
 
+        leds['NET'].on()
         # Read request header
         content_length = None
         connection_header = None
@@ -78,8 +82,10 @@ def handle_client(client):
 
         print(method, path, content_length)
 
+        leds['NET'].off()
         try:
             status, status_string, headers, body = handle_request(method, path, content_length, header, body)
+            leds['NET'].on()
             send_response(client, status, status_string, headers, body)
 
         except Exception as e:
@@ -88,11 +94,16 @@ def handle_client(client):
                           {"Content-Type": "text/plain"},
                           str(e))
 
+        leds['NET'].off()
         gc.collect()
         if connection_header != 'keep-alive':
             break
 
     client.close()
+
+
+def blink(timer):
+    leds['STS'].toggle()
 
 
 def serve():
@@ -108,12 +119,10 @@ def serve():
     try:
         while True:
             try:
-                led = Pin("LED", Pin.OUT)
                 timer = Timer()
-                timer.init(freq=1, mode=Timer.PERIODIC, callback=wifi.blink)
+                timer.init(freq=1, mode=Timer.PERIODIC, callback=blink)
                 client, _client_addr = listen_socket.accept()
                 timer.deinit()
-                led.on()
 
                 handle_client(client)
 
