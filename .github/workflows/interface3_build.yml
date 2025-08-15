@@ -52,7 +52,7 @@ jobs:
         run: mv firmware.uf2 coax-interface3-${{ env.TIMESTAMP }}.uf2
 
       - name: Upload firmware image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: coax-interface3-${{ env.TIMESTAMP }}
           path: micropython/ports/rp2/build-PICO_W/coax-interface3-${{ env.TIMESTAMP }}.uf2
