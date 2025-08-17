@@ -320,7 +320,7 @@ def transact(tx_buf, timeout=TRANSACT_TIMEOUT_MS):
     if receive_count == -1:
         raise Timeout()
 
-    print('rx: ', rx_buf[0:receive_count])
+    # print('rx: ', rx_buf[0:receive_count])
 
     return rx_buf[0:receive_count]
 

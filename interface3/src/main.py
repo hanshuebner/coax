@@ -1,5 +1,5 @@
 import wifi
-import webserver
+import tcpserver
 import time
 import config
 import leds
@@ -7,4 +7,4 @@ import leds
 while not wifi.connect(config.wifi['ssid'], config.wifi['password']):
     time.sleep(1)
 
-webserver.serve()
+tcpserver.serve()

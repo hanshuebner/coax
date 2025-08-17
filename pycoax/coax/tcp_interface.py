@@ -1,0 +1,187 @@
+"""
+coax.tcp_interface
+~~~~~~~~~~~~~~~~~~~~~
+"""
+import struct
+import socket
+import re
+from contextlib import contextmanager
+
+from .exceptions import ReceiveError, InterfaceError, ReceiveTimeout
+from coax.interface import normalize_frame, Interface
+
+HOST_PORT_RE = re.compile(r'^(?P<host>[^:]+)(?::(?P<port>\d+))?$')
+
+
+def split_host_port(s):
+    m = HOST_PORT_RE.match(s)
+    if not m:
+        raise ValueError("Invalid host:port string: " + s)
+    host = m.group("host")
+    port = int(m.group("port")) if m.group("port") else None
+    return host, port
+
+class TcpInterface(Interface):
+    """TCP attached 3270 coax interface."""
+
+    # Protocol constants (must match server)
+    TCP_PORT = 3278
+    MAX_FRAME_SIZE = 4100
+
+    # Command codes
+    CMD_TRANSACT = 0x01
+    CMD_PING = 0x02
+
+    # Response codes
+    RESP_OK = 0x00
+    RESP_ERROR = 0x01
+    RESP_TIMEOUT = 0x02
+    RESP_INVALID_CMD = 0x03
+    RESP_INVALID_LENGTH = 0x04
+
+    def __init__(self, host, port=None):
+        if host is None:
+            raise ValueError('Host is required')
+
+        super().__init__()
+
+        self.host = host
+        self.port = port or self.TCP_PORT
+        self.socket = None
+
+    def identifier(self):
+        return f"{self.host}:{self.port}"
+
+    def close(self):
+        if self.socket:
+            self.socket.close()
+            self.socket = None
+
+    def _ensure_connected(self):
+        """Ensure socket is connected."""
+        if self.socket is None:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((self.host, self.port))
+
+    def _pack_frame(self, cmd_code, data):
+        """
+        Pack a command frame: [16-bit length][8-bit cmd][data]
+        """
+        if len(data) > self.MAX_FRAME_SIZE - 3:
+            raise ValueError("Data too large for frame")
+
+        frame_len = len(data) + 1  # +1 for cmd code
+        frame = struct.pack("<HB", frame_len, cmd_code) + data
+        return frame
+
+    def _unpack_response(self, frame_len, response_data):
+        """
+        Unpack a response frame: [8-bit resp_code][data]
+        Returns (resp_code, data)
+        """
+        if frame_len < 1:
+            raise ValueError("Response too short")
+
+        resp_code = response_data[0]
+        data = response_data[1:]
+        return resp_code, data
+
+    def _send_command(self, cmd_code, data=b"", timeout=None):
+        """
+        Send a command and receive response
+        """
+        self._ensure_connected()
+
+        # Set socket timeout if specified
+        if timeout is not None:
+            self.socket.settimeout(timeout)
+
+        # Pack and send command
+        frame = self._pack_frame(cmd_code, data)
+        self.socket.send(frame)
+
+        # Read response length (2 bytes)
+        bytes_received = 0
+        length_data = bytearray(2)
+        while bytes_received < 2:
+            chunk = self.socket.recv(2 - bytes_received)
+            if len(chunk) == 0:
+                raise ConnectionError("Connection closed")
+            length_data[bytes_received:bytes_received + len(chunk)] = chunk
+            bytes_received += len(chunk)
+
+        frame_len = struct.unpack("<H", length_data)[0]
+
+        # Read response data
+        bytes_received = 0
+        response_data = bytearray(frame_len)
+        while bytes_received < frame_len:
+            chunk = self.socket.recv(frame_len - bytes_received)
+            if len(chunk) == 0:
+                raise ConnectionError("Connection closed")
+            response_data[bytes_received:bytes_received + len(chunk)] = chunk
+            bytes_received += len(chunk)
+
+        return self._unpack_response(frame_len, response_data)
+
+    def _transmit_receive(self, outbound_frames, response_lengths, timeout):
+        if len(response_lengths) != len(outbound_frames):
+            raise ValueError('Response lengths length must equal outbound frames length')
+
+        # Expand messages before sending.
+        frames = [(address, _normalize_and_expand_frame(frame)) for (address, frame) in outbound_frames]
+
+        responses = []
+        for frame in frames:
+            address, message = frame
+            try:
+                resp_code, data = self._send_command(self.CMD_TRANSACT, message, timeout)
+
+                if resp_code == self.RESP_OK:
+                    responses.append(_decode_frame(data))
+                elif resp_code == self.RESP_TIMEOUT:
+                    responses.append(ReceiveTimeout())
+                elif resp_code == self.RESP_ERROR:
+                    responses.append(ReceiveError(f'TCP error: {data.decode("ascii", errors="replace")}'))
+                elif resp_code == self.RESP_INVALID_CMD:
+                    responses.append(ReceiveError('TCP invalid command'))
+                elif resp_code == self.RESP_INVALID_LENGTH:
+                    responses.append(ReceiveError('TCP invalid length'))
+                else:
+                    responses.append(ReceiveError(f'TCP unknown response code: {resp_code}'))
+
+            except socket.timeout:
+                responses.append(ReceiveTimeout())
+            except (socket.error, ConnectionError) as e:
+                responses.append(InterfaceError(str(e)))
+
+        return responses
+
+
+def _normalize_and_expand_frame(frame):
+    (words, repeat_count, repeat_offset) = normalize_frame(frame)
+    # Uncompress the run-length encoded tail of the message
+    if repeat_count > 0:
+        words = words[repeat_offset:] * repeat_count
+
+    message = b''
+    for i in range(len(words)):
+        message += struct.pack('<h', words[i])
+
+    return message
+
+
+def _decode_frame(message):
+    assert len(message) % 2 == 0
+    return struct.unpack('<%dh' % int(len(message)/2), message)
+
+
+@contextmanager
+def open_tcp_interface(spec):
+    """Returns a 3270 coax interface connected through TCP."""
+    host, port = split_host_port(spec)
+    interface = TcpInterface(host, port)
+    try:
+        yield interface
+    finally:
+        interface.close()

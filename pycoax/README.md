@@ -4,7 +4,7 @@ Python IBM 3270 coaxial interface library.
 
 ## Usage
 
-You will need to build an [interface](../interface1) and connect it to your computer.
+You will need to build an [interface](../interface1) and connect it to your computer, or use Interface 3 over TCP/IP.
 
 Install using `pip`:
 
@@ -19,6 +19,7 @@ import time
 from coax import open_serial_interface, Poll, PollAck, LoadAddressCounterHi, \
                  LoadAddressCounterLo, WriteData, ReceiveTimeout
 
+# Serial interface (Interface 1 or 2)
 with open_serial_interface('/dev/ttyACM0') as interface:
     # Wait for a terminal to attach...
     poll_response = None
@@ -53,6 +54,14 @@ with open_serial_interface('/dev/ttyACM0') as interface:
 
     # Write a secret message.
     interface.execute(WriteData(bytes.fromhex('a1 84 00 92 94 91 84 00 93 8e 00 83 91 88 8d 8a 00 98 8e 94 91 00 ae 95 80 8b 93 88 8d 84')))
+
+# TCP interface (Interface 3)
+with open_tcp_interface('192.168.1.100', 3278) as interface:
+    # Same commands work with TCP interface
+    poll_response = interface.execute(Poll(), timeout=1)
+    if poll_response:
+        print(poll_response)
+        interface.execute(PollAck())
 ```
 
 See [examples](examples) for complete examples.
