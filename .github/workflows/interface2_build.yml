@@ -95,7 +95,7 @@ jobs:
           unzip cache.zip
           rm cache.zip
       - name: Attach bitstream
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: fpga_bitstream
           path: |
@@ -127,7 +127,7 @@ jobs:
       - name: Build firmware
         run: pio run
       - name: Attach firmware
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: firmware
           path: interface2/firmware/.pio/build/default/firmware.bin
