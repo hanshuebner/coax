@@ -64,25 +64,25 @@ operate only on full frames.
 
 1. **Flash MicroPython Firmware**:
 
-A prebuilt MicroPython image for the Raspberry Pi Pico W (RP2040
-version) can be downloaded from
-[my web site](https://vaxbusters.org/micropython-v1.26.0-rpi-pico-w.uf2).
-Connect the Rasperry Pi Pico W to your workstation using its Micro USB
-port while holding the small white "BOOTSEL" button, then copy the
-image to the USB drive that automatically appears (mounted as
-/Volumes/RPI-RP2/ on Macs).
+   A prebuilt MicroPython image for the Raspberry Pi Pico W (RP2040
+   version) can be downloaded from
+   [my web site](https://vaxbusters.org/micropython-v1.26.0-rpi-pico-w.uf2).
+   Connect the Rasperry Pi Pico W to your workstation using its Micro USB
+   port while holding the small white "BOOTSEL" button, then copy the
+   image to the USB drive that automatically appears (mounted as
+   `/Volumes/RPI-RP2/` on Macs).
 
 2. **Install mpremote**
 
-You can either install mpremote from your system's package repository
-or using pip.  When using pip, using a virtual environment is
-recommended:
+   You can either install mpremote from your system's package repository
+   or using pip.  When using pip, using a virtual environment is
+   recommended:
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install mpremote
-```
+   ```bash
+   python -m venv .venv
+   . .venv/bin/activate
+   pip install mpremote
+   ```
 
 3. **Upload MicroPython Firmware to Pico**:
    ```bash
