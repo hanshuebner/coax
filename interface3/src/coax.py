@@ -1,6 +1,5 @@
 import micropython
 import rp2
-import rp_devices as devs
 import uctypes
 import struct
 from time import sleep, ticks_ms
