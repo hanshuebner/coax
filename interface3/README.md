@@ -46,33 +46,6 @@ implemented in MicroPython.  Data between MicroPython and the PIO
 blocks is exchanged through DMA, allowing the MicroPython part to
 operate only on full frames.
 
-## TCP Protocol
-
-The TCP based protocol is described in a [separate file](./TCP_PROTOCOL.md).
-
-## HTTP API Endpoints
-
-### Communication Flow for HTTP
-1. oec sends HTTP POST requests to `/transact` with coax data in the request body
-2. Interface3 receives the data and transmits it over the coax interface
-3. The 3270 terminal responds with data
-4. Interface3 receives the response and returns it to oec via HTTP response
-
-### POST /transact
-Main endpoint for coax transactions:
-- **Request Body**: Binary coax data to transmit
-- **Headers**:
-  - `x-3270-timeout`: Timeout in milliseconds (optional, default: 1000ms)
-- **Response**: Binary coax response data
-- **Status Codes**:
-  - `200 OK`: Successful transaction
-  - `408 Request Timeout`: No response received within timeout
-  - `400 Bad Request`: Invalid request format
-
-### POST /demo
-Test endpoint that executes a demo transaction:
-- **Response**: Plain text confirmation message
-
 ## Installation
 
 ### Prerequisites
@@ -158,7 +131,34 @@ The interface provides several LED indicators:
 
 Interface3 is designed to work with oec (3174 emulation software)
 written by Andrew Kay. oec can be found at
-[github.com/lowobservable/oec](https://github.com/lowobservable/oec).
+[github.com/hanshuebner/oec](https://github.com/hanshuebner/oec).
+
+## TCP Protocol
+
+The TCP based protocol is described in a [separate file](./TCP_PROTOCOL.md).
+
+## HTTP API Endpoints
+
+### Communication Flow for HTTP
+1. oec sends HTTP POST requests to `/transact` with coax data in the request body
+2. Interface3 receives the data and transmits it over the coax interface
+3. The 3270 terminal responds with data
+4. Interface3 receives the response and returns it to oec via HTTP response
+
+### POST /transact
+Main endpoint for coax transactions:
+- **Request Body**: Binary coax data to transmit
+- **Headers**:
+  - `x-3270-timeout`: Timeout in milliseconds (optional, default: 1000ms)
+- **Response**: Binary coax response data
+- **Status Codes**:
+  - `200 OK`: Successful transaction
+  - `408 Request Timeout`: No response received within timeout
+  - `400 Bad Request`: Invalid request format
+
+### POST /demo
+Test endpoint that executes a demo transaction:
+- **Response**: Plain text confirmation message
 
 ## License
 
