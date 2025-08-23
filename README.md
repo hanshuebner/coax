@@ -10,6 +10,7 @@ Tools for connecting to real [IBM 3270](https://en.wikipedia.org/wiki/IBM_3270) 
 
 * [interface1](interface1) - Legacy interface using obsolete National Semiconductor DP8340 and DP8341
 * [interface2](interface2) - Modern interface using a Lattice iCE40 FPGA and STM32 microcontroller
+* [interface3](interface3) - WiFi interface based on Raspberry Pi Pico W
 
 ## Software
 
