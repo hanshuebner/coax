@@ -39,7 +39,7 @@ The interface uses a Raspberry Pi Pico with custom PCB that provides:
 
 The interface3 software provides implements the line level manchester
 encoded protocol in a
-(PIO)[https://www.raspberrypi.com/news/what-is-pio/] block.  This
+[PIO](https://www.raspberrypi.com/news/what-is-pio/) block.  This
 offloads the handling of the real-time protocol requirements from the
 main ARM CPU and allows the rest of the interface software to be
 implemented in MicroPython.  Data between MicroPython and the PIO
