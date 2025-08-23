@@ -77,9 +77,9 @@ Test endpoint that executes a demo transaction:
 
 ### Prerequisites
 
-1. **MicroPython with DMA Extensions**: You need a custom MicroPython firmware that includes DMA extensions for the Raspberry Pi Pico. The standard MicroPython firmware does not include the required DMA functionality.
-
-   **Note**: A static URL for the required .uf2 file will be provided later.
+1. **MicroPython with DMA Extensions**: You need a MicroPython release
+   1.26.0 or later to get support for the DMA transfer library
+   required by the firmware.
 
 2. **Hardware**: The interface3 PCB with Raspberry Pi Pico installed
 
@@ -90,12 +90,28 @@ Test endpoint that executes a demo transaction:
 ### Installation Steps
 
 1. **Flash MicroPython Firmware**:
-   ```bash
-   # Download and flash the custom MicroPython .uf2 file
-   # (URL will be provided)
-   ```
 
-2. **Upload Python Software**:
+A prebuilt MicroPython image for the Raspberry Pi Pico W (RP2040
+version) can be downloaded from
+[my web site](https://vaxbusters.org/micropython-v1.26.0-rpi-pico-w.uf2).
+Connect the Rasperry Pi Pico W to your workstation using its Micro USB
+port while holding the small white "BOOTSEL" button, then copy the
+image to the USB drive that automatically appears (mounted as
+/Volumes/RPI-RP2/ on Macs).
+
+2. **Install mpremote**
+
+You can either install mpremote from your system's package repository
+or using pip.  When using pip, using a virtual environment is
+recommended:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install mpremote
+```
+
+3. **Upload MicroPython Firmware to Pico**:
    ```bash
    # Use the provided upload script
    ./upload-and-run.sh
@@ -106,7 +122,7 @@ Test endpoint that executes a demo transaction:
    - Copy all Python files from `src/` to the Pico
    - Start the main application
 
-3. **Configure WiFi**:
+4. **Configure WiFi**:
    ```bash
    # Use the provided WiFi configuration script
    ./config-wifi.sh
