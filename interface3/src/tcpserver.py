@@ -62,7 +62,7 @@ def handle_transact_command(client, data):
     except coax.Timeout:
         leds['ERR'].on()
         send_response(client, RESP_TIMEOUT, b"Transaction timeout")
-    except Exception as e:
+    except BaseException as e:
         leds['ERR'].on()
         send_response(client, RESP_ERROR, str(e).encode())
 

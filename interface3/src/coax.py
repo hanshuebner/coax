@@ -15,12 +15,20 @@ PIN_TEST = 6
 PIN_LED_RX = 7
 PIN_LED_TX = 8
 
-dma = rp2.DMA()
+tx_dma = rp2.DMA()
+rx_dma = rp2.DMA()
 
-TX_DMA_CHAN = dma.claim_unused_channel(True)
-RX_DMA_CHAN = dma.claim_unused_channel(True)
+# State machine number configuration.  The choice is pretty much
+# arbitrary.  The correct DMA transmit selectors need to be chosen
+# from the data sheet.
 
-DMA_CHAN_MASK = 1 << TX_DMA_CHAN | 1 << RX_DMA_CHAN
+TX_SM_NUM = 7       # PIO1 SM3
+TX_TREQ_SEL = 11    # DREQ_PIO1_TX3
+
+TX_DELAY_SM_NUM = 6 # PIO1 SM2
+
+RX_SM_NUM = 1       # PIO0 SM1
+RX_TREQ_SEL = 5     # DREQ_PIO0_RX1
 
 BIT_RATE = 2_358_700
 
@@ -147,14 +155,13 @@ def recv_serial():
     jmp(pin, "wait_idle")
     set(pins, 0b00)
 
-recv = rp2.StateMachine(1, recv_serial, freq=12 * BIT_RATE,
+recv = rp2.StateMachine(RX_SM_NUM, recv_serial, freq=12 * BIT_RATE,
                         in_base=Pin(PIN_RX), jmp_pin=Pin(PIN_RX),
                         set_base=Pin(PIN_TEST))
-xmit = rp2.StateMachine(7, xmit_serial, freq=12 * BIT_RATE,
+xmit = rp2.StateMachine(TX_SM_NUM, xmit_serial, freq=12 * BIT_RATE,
                         out_base=Pin(PIN_TX), set_base=Pin(PIN_TX))
-xmit_delay = rp2.StateMachine(6, xmit_serial_delay, freq=12 * BIT_RATE,
+xmit_delay = rp2.StateMachine(TX_DELAY_SM_NUM, xmit_serial_delay, freq=12 * BIT_RATE,
                               in_base=Pin(PIN_TX), set_base=Pin(PIN_TX_DELAY))
-
 
 @micropython.viper
 def manchester_encode_word(value: uint) -> uint:
@@ -224,23 +231,18 @@ def demo(word=18):
 def setup_tx_dma(buf):
     """
     Set up transmit DMA
-    :param buf: bytearray with number of longs - 1 to send manchester encoded data to send
+    :param buf: bytearray with number of longs - 1 (manchester encoded) to send
     """
-    dma_chan = devs.DMA_CHANS[TX_DMA_CHAN]
 
-    dma_chan.READ_ADDR_REG = uctypes.addressof(buf)
-    dma_chan.WRITE_ADDR_REG = devs.PIO1_BASE + devs.PIO_TXF3_OFFSET
-    dma_chan.TRANS_COUNT_REG = int(len(buf) / 4)
-
-    dma_chan.CTRL_TRIG_REG = 0
-    dma_chan.CTRL_TRIG.CHAIN_TO = TX_DMA_CHAN
-    dma_chan.CTRL_TRIG.IRQ_QUIET = 1
-    dma_chan.CTRL_TRIG.INCR_READ = 1
-    dma_chan.CTRL_TRIG.INCR_WRITE = 0
-    dma_chan.CTRL_TRIG.TREQ_SEL = devs.DREQ_PIO1_TX3
-    dma_chan.CTRL_TRIG.DATA_SIZE = 2  # SIZE_WORD
-
-    dma_chan.CTRL_TRIG.EN = 1
+    tx_dma.config(
+        read=uctypes.addressof(buf),
+        write=xmit,
+        count=int(len(buf) / 4),
+        ctrl=tx_dma.pack_ctrl(
+            size=2, # word
+            inc_write=False,
+            treq_sel=TX_TREQ_SEL),
+        trigger=True)
 
     xmit_delay.restart()
     xmit_delay.active(1)
@@ -253,21 +255,16 @@ def setup_rx_dma(buf):
     Set up receive DMA into the given buffer
     :param buf: bytearray of words to receive
     """
-    dma_chan = devs.DMA_CHANS[RX_DMA_CHAN]
 
-    dma_chan.READ_ADDR_REG = devs.PIO0_BASE + devs.PIO_RXF1_OFFSET
-    dma_chan.WRITE_ADDR_REG = uctypes.addressof(buf)
-    dma_chan.TRANS_COUNT_REG = int(len(buf) / 2)
-
-    dma_chan.CTRL_TRIG_REG = 0
-    dma_chan.CTRL_TRIG.CHAIN_TO = RX_DMA_CHAN
-    dma_chan.CTRL_TRIG.IRQ_QUIET = 1
-    dma_chan.CTRL_TRIG.INCR_READ = 0
-    dma_chan.CTRL_TRIG.INCR_WRITE = 1
-    dma_chan.CTRL_TRIG.TREQ_SEL = devs.DREQ_PIO0_RX1
-    dma_chan.CTRL_TRIG.DATA_SIZE = 1  # SIZE_HALFWORD
-
-    dma_chan.CTRL_TRIG.EN = 1
+    rx_dma.config(
+        read=recv,
+        write=uctypes.addressof(buf),
+        count=int(len(buf) / 2),
+        ctrl=rx_dma.pack_ctrl(
+            size=1, # half word
+            inc_read=False,
+            treq_sel=RX_TREQ_SEL),
+        trigger=True)
 
     recv.restart()
     recv.active(1)
@@ -306,16 +303,11 @@ def transact(tx_buf, timeout=TRANSACT_TIMEOUT_MS):
     xmit_delay.active(0)
 
     # Abort DMA
-    devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.EN = 0
-    devs.DMA_CHANS[TX_DMA_CHAN].CTRL_TRIG.EN = 0
-    devs.DMA_DEVICE.CHAN_ABORT = DMA_CHAN_MASK
-    while devs.DMA_DEVICE.CHAN_ABORT != 0:
-        pass
+    rx_dma.active(0)
+    tx_dma.active(0)
 
-    assert devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.BUSY == 0
-    assert devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.EN == 0
-    assert devs.DMA_CHANS[TX_DMA_CHAN].CTRL_TRIG.BUSY == 0
-    assert devs.DMA_CHANS[TX_DMA_CHAN].CTRL_TRIG.EN == 0
+    while rx_dma.active() or tx_dma.active():
+        pass
 
     if receive_count == -1:
         raise Timeout()
@@ -356,13 +348,10 @@ def receive():
     recv.active(0)
 
     # Abort DMA
-    devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.EN = 0
-    devs.DMA_DEVICE.CHAN_ABORT = DMA_CHAN_MASK
-    while devs.DMA_DEVICE.CHAN_ABORT != 0:
-        pass
+    rx_dma.active(0)
 
-    assert devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.BUSY == 0
-    assert devs.DMA_CHANS[RX_DMA_CHAN].CTRL_TRIG.EN == 0
+    while rx_dma.active():
+        pass
 
     print('rx ', receive_count, ': ', rx_buf[0:receive_count])
 
