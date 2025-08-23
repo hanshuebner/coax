@@ -17,7 +17,7 @@ Interface3 enables communication with IBM 3270 terminals by:
    is implemented using PIO blocks of the RP2040 microcontroller.
 3. **TCP Server**: A TCP server is provided that allows the exchange
    of 3270 protocol frames through WiFi using a custom binary
-   protocol.  The [oec](https://github.com/lowobservable/oec) terminal
+   protocol.  The [oec](https://github.com/hanshuebner/oec) terminal
    controller can connect to this server to bridge between a 3270
    terminal and a tn3270 host.
 4. **HTTP Server**: To ease testing and experimentation, a HTTP server

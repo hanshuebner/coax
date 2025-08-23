@@ -18,4 +18,4 @@ Tools for connecting to real [IBM 3270](https://en.wikipedia.org/wiki/IBM_3270) 
 
 ## See Also
 
-* [oec](https://github.com/lowobservable/oec) - IBM 3270 terminal controller (a replacement for the IBM 3174)
+* [oec](https://github.com/hanshuebner/oec) - IBM 3270 terminal controller (a replacement for the IBM 3174)
