@@ -94,8 +94,12 @@ operate only on full frames.
    - Reset the device
    - Copy all Python files from `src/` to the Pico
    - Start the main application
+  
+   You will see the output of the MicroPython firmware.  It may try to connect
+   to a previously configured WiFi network.  You can interrupt the Firmware
+   using Ctrl-C to get to the Python repl or exit the connection using Ctrl-X.
 
-4. **Configure WiFi**:
+5. **Configure WiFi**:
    ```bash
    # Use the provided WiFi configuration script
    ./config-wifi.sh
@@ -105,6 +109,11 @@ operate only on full frames.
    - Prompt for WiFi network name and password
    - Create a `config.json` file on the device
    - Reset the device to apply the configuration
+  
+   Again, you'll be looking at the diagnostic output of the firmware at the
+   end of this process.  When it connects to the WiFi network successfully, it
+   will print the IP address assigned to it by the DHCP server.  Take a note
+   of this address as you'll need it to connect oec to the adapter.
 
 ### Configuration
 
