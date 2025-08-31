@@ -24,6 +24,16 @@ fi
 /bin/echo -n "WiFi password: "
 stty -echo
 read wifi_password
+stty echo
+echo ""
+
+/bin/echo -n "Connect to oec at host[:port]: "
+read connect_to
+if [ -z "$connect_to" ]
+then
+    echo "Need server to connect to"
+    exit 1
+fi
 
 old_config=$(mktemp)
 new_config=$(mktemp)
@@ -34,7 +44,11 @@ then
 else
     echo "{}" > $old_config
 fi
-jq ".wifi.ssid=\"$wifi_name\" | .wifi.password=\"$wifi_password\"" < $old_config > $new_config
+jq --arg ssid "$wifi_name" --arg pw "$wifi_password" --arg ct "$connect_to" \
+   '.wifi.ssid=$ssid
+  | .wifi.password=$pw
+  | if $ct != "" then .connect_to=$ct else del(.connect_to) end' \
+  < "$old_config" > "$new_config"
 mpremote cp --no-verbose $new_config :config.json
 echo "Device has been configured to join network $wifi_name"
 echo

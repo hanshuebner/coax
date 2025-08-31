@@ -25,8 +25,8 @@ class TcpInterface(Interface):
     """TCP attached 3270 coax interface."""
 
     # Protocol constants (must match server)
-    TCP_PORT = 3278
-    MAX_FRAME_SIZE = 4100
+    TCP_PORT = 3174
+    MAX_FRAME_SIZE = 4300
 
     # Command codes
     CMD_TRANSACT = 0x01

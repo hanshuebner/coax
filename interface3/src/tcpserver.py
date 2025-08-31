@@ -7,6 +7,7 @@ from machine import Pin
 import wifi
 import coax
 from leds import leds
+import config
 
 # Protocol constants
 TCP_PORT = 3278
@@ -32,7 +33,7 @@ POLL_ACK_COMMAND_DATA = b'E\x00'
 # Predefined responses
 EMPTY_RESPONSE_DATA   = b'\x00\x00'
 
-client_connected = False
+loop = asyncio.get_event_loop()
 
 async def send_response(writer, resp_code, data):
     """
@@ -116,6 +117,7 @@ async def read_command(reader):
     Returns (cmd_code, data) or None if connection closed
     """
     len_buf = await reader.readexactly(2)
+    print('read length ', len_buf)
     frame_len = struct.unpack("<H", len_buf)[0]
 
     # Validate frame length
@@ -133,25 +135,10 @@ async def read_command(reader):
 
     return cmd_code, data
 
-async def handle_client(reader, writer):
+async def handle_oec_connection(reader, writer):
     """
-    Handle a single client connection
+    Handle a single OEC connection
     """
-    global client_connected
-
-    host, port = reader.get_extra_info('peername')
-    print(f'Client {host}:{port} connected')
-
-    if client_connected:
-        await send_response(writer, RESP_ERROR, "Another client is already connected".encode())
-        reader.close()
-        writer.close()
-        await reader.wait_closed()
-        await writer.wait_closed()
-        print("Client connection closed - Controller busy")
-        return
-
-    client_connected = True
     try:
         while True:
             # Read command
@@ -176,43 +163,53 @@ async def handle_client(reader, writer):
             gc.collect()
 
     except Exception as e:
-        print(f"Client error: {e}")
+        print(f"OEC error: {e}")
 
     finally:
         reader.close()
         writer.close()
         await reader.wait_closed()
         await writer.wait_closed()
-        print("Client connection closed")
-        client_connected = False
 
-async def serve_incoming_connections():
-    server = asyncio.start_server(handle_client, '0.0.0.0', TCP_PORT)
-    asyncio.create_task(server)
+
+async def connect_to_server():
+    host, _, port = config.connect_to.partition(':')
+    port = int(port or 3174)
+
     while True:
-        leds['STS'].toggle()
-        await asyncio.sleep_ms(1000)
+        leds['STS'].on()
+        try:
+            print(f'trying to connect to {host}:{port}')
+            reader, writer = await asyncio.open_connection(host, port)
+            await handle_oec_connection(reader, writer)
+            await asyncio.sleep_ms(1000)
+            leds['STS'].off()
+            await asyncio.sleep_ms(1000)
+        except Exception as e:
+            print(f"Cannot connect to {host}:{port}: {e}")
 
 async def poll_keyboard():
     global poll_response_queue
     while True:
-        response = coax.transact(POLL_COMMAND_DATA)
-        if response != EMPTY_RESPONSE_DATA:
-            poll_response_queue.append(response)
-            print('appending poll response to queue', response)
-            response = coax.transact(POLL_ACK_COMMAND_DATA)
+        try:
+            response = coax.transact(POLL_COMMAND_DATA)
             if response != EMPTY_RESPONSE_DATA:
-                print('unexpected response to poll ack', response)
+                poll_response_queue.append(response)
+                print('appending poll response to queue', response)
+                response = coax.transact(POLL_ACK_COMMAND_DATA)
+                if response != EMPTY_RESPONSE_DATA:
+                    print('unexpected response to poll ack', response)
+        except coax.Timeout:
+            print("Timeout waiting for terminal response on coax interface")
         await asyncio.sleep_ms(3)
 
 def serve():
     """
     Start the TCP server
     """
-    loop = asyncio.get_event_loop()
 
     loop.create_task(poll_keyboard())
-    loop.create_task(serve_incoming_connections())
+    loop.create_task(connect_to_server())
 
     try:
         loop.run_forever()
