@@ -1,14 +1,15 @@
+import asyncio
 import socket
 import struct
 import gc
-from machine import Pin, Timer
+from machine import Pin
 import wifi
 import coax
 from leds import leds
 
 # Protocol constants
 TCP_PORT = 3278
-MAX_FRAME_SIZE = 4100  # ~4KB limit
+MAX_FRAME_SIZE = 4300  # ~4KB limit
 STATIC_CMD_BUFFER = bytearray(MAX_FRAME_SIZE)
 STATIC_RECV_BUFFER = bytearray(MAX_FRAME_SIZE)
 
@@ -23,7 +24,7 @@ RESP_TIMEOUT = 0x02
 RESP_INVALID_CMD = 0x03
 RESP_INVALID_LENGTH = 0x04
 
-def send_response(client, resp_code, data):
+async def send_response(writer, resp_code, data):
     """
     Send a response directly to the TCP connection: [16-bit length][8-bit resp_code][data]
     """
@@ -31,74 +32,63 @@ def send_response(client, resp_code, data):
         raise ValueError("Data too large for frame")
 
     frame_len = len(data) + 1  # +1 for resp code
-    client.send(struct.pack("<HB", frame_len, resp_code))
+    writer.write(struct.pack("<HB", frame_len, resp_code))
     if data:
-        client.send(data)
+        writer.write(data)
+        writer.drain()
 
-def handle_transact_command(client, data):
+async def handle_transact_command(writer, data):
     """
     Handle transact command - send data to coax interface
     """
     try:
         # Validate data length (must be even for coax protocol)
         if len(data) % 2 != 0:
-            send_response(client, RESP_ERROR, b"Data length must be even")
+            await send_response(writer, RESP_ERROR, b"Data length must be even")
             return
-
-        # Use static buffer for transaction
-        STATIC_CMD_BUFFER[:len(data)] = data
 
         # Perform coax transaction
         timeout = 1000  # Default timeout
-        rx_data = coax.transact(STATIC_CMD_BUFFER[:len(data)], timeout=timeout)
+        rx_data = coax.transact(data, timeout=timeout)
 
         # Limit response size and send directly
         resp_len = min(len(rx_data), MAX_FRAME_SIZE - 3)
         response_data = rx_data[:resp_len]
 
         leds['ERR'].off()
-        send_response(client, RESP_OK, response_data)
+        await send_response(writer, RESP_OK, response_data)
 
     except coax.Timeout:
         leds['ERR'].on()
-        send_response(client, RESP_TIMEOUT, b"Transaction timeout")
+        await send_response(writer, RESP_TIMEOUT, b"Transaction timeout")
     except BaseException as e:
         leds['ERR'].on()
-        send_response(client, RESP_ERROR, str(e).encode())
+        await send_response(writer, RESP_ERROR, str(e).encode())
 
-def handle_ping_command(client, data):
+async def handle_ping_command(writer, data):
     """
     Handle ping command - simple echo for testing
     """
-    send_response(client, RESP_OK, b"PONG")
+    await send_response(writer, RESP_OK, b"PONG")
 
-def handle_command(client, cmd_code, data):
+async def handle_command(writer, cmd_code, data):
     """
     Route command to appropriate handler
     """
     if cmd_code == CMD_TRANSACT:
-        handle_transact_command(client, data)
+        await handle_transact_command(writer, data)
     elif cmd_code == CMD_PING:
-        handle_ping_command(client, data)
+        await handle_ping_command(writer, data)
     else:
-        send_response(client, RESP_INVALID_CMD, f"Unknown command: {cmd_code}".encode())
+        await send_response(writer, RESP_INVALID_CMD, f"Unknown command: {cmd_code}".encode())
 
-def read_command(client):
+async def read_command(reader):
     """
     Read a command from the client
     Returns (cmd_code, data) or None if connection closed
     """
-    # Read length field (2 bytes)
-    bytes_received = 0
-    while bytes_received < 2:
-        chunk = client.recv(2 - bytes_received)
-        if len(chunk) == 0:
-            print("Connection closed while reading length field")
-            return None  # Connection closed
-        STATIC_RECV_BUFFER[bytes_received:bytes_received + len(chunk)] = chunk
-        bytes_received += len(chunk)
-
-    frame_len = struct.unpack("<H", STATIC_RECV_BUFFER[:2])[0]
+    len_buf = await reader.readexactly(2)
+    frame_len = struct.unpack("<H", len_buf)[0]
 
     # Validate frame length
     if frame_len > MAX_FRAME_SIZE - 2:  # -2 for length field
@@ -106,32 +96,16 @@ def read_command(client):
         return None  # Frame too large
 
     # Read command code (1 byte)
-    cmd_data = client.recv(1)
-    if len(cmd_data) == 0:
-        print("Connection closed while reading command code")
-        return None  # Connection closed
+    cmd_data = await reader.readexactly(1)
 
     cmd_code = cmd_data[0]
 
     # Read remaining data (if any)
-    data_len = frame_len - 1  # -1 for command code
-    if data_len > 0:
-        bytes_received = 0
-        while bytes_received < data_len:
-            chunk = client.recv(data_len - bytes_received)
-            if len(chunk) == 0:
-                print(f"Connection closed while reading data (received {bytes_received}/{data_len} bytes)")
-                return None  # Connection closed
-            STATIC_RECV_BUFFER[bytes_received:bytes_received + len(chunk)] = chunk
-            bytes_received += len(chunk)
-
-        data = STATIC_RECV_BUFFER[:data_len]
-    else:
-        data = b""
+    data = await reader.readexactly(frame_len - 1) # -1 for command code
 
     return cmd_code, data
 
-def handle_client(client):
+async def handle_client(reader, writer):
     """
     Handle a single client connection
     """
@@ -140,7 +114,7 @@ def handle_client(client):
     try:
         while True:
             # Read command
-            result = read_command(client)
+            result = await read_command(reader)
             if result is None:
                 break
 
@@ -150,11 +124,11 @@ def handle_client(client):
 
             try:
                 # Process command and send response directly
-                handle_command(client, cmd_code, data)
+                await handle_command(writer, cmd_code, data)
 
             except Exception as e:
                 print(f"Error handling command: {e}")
-                send_response(client, RESP_ERROR, str(e).encode())
+                await send_response(writer, RESP_ERROR, str(e).encode())
                 raise
 
             leds['NET'].off()
@@ -164,53 +138,28 @@ def handle_client(client):
         print(f"Client error: {e}")
 
     finally:
-        client.close()
+        reader.close()
+        writer.close()
+        await reader.wait_close()
+        await writer.wait_close()
         print("Client connection closed")
 
-def blink(timer):
-    """
-    Blink status LED to show server is running
-    """
-    leds['STS'].toggle()
+async def serve_incoming_connections():
+    server = asyncio.start_server(handle_client, '0.0.0.0', TCP_PORT)
+    asyncio.create_task(server)
+    while True:
+        leds['STS'].toggle()
+        await asyncio.sleep_ms(1000)
 
 def serve():
     """
     Start the TCP server
     """
-    listen_addr = socket.getaddrinfo('0.0.0.0', TCP_PORT)[0][-1]
-
-    listen_socket = socket.socket()
-    listen_socket.bind(listen_addr)
-    listen_socket.listen(1)
-
-    print(f'TCP server listening on port {TCP_PORT}')
-
-    # Status LED timer
-    timer = Timer()
-    timer.init(freq=1, mode=Timer.PERIODIC, callback=blink)
-
+    loop = asyncio.get_event_loop()
+    loop.create_task(serve_incoming_connections())
     try:
-        while True:
-            try:
-                client, client_addr = listen_socket.accept()
-                print(f"Connection from {client_addr}")
-
-                handle_client(client)
-
-            except Exception as e:
-                print(f'Error handling client: {e}')
-                try:
-                    client.close()
-                except:
-                    pass
-
+        loop.run_forever()
+    except Exception as e:
+        print('Error serving clients: ', e)
     except KeyboardInterrupt:
-        print("Server interrupted")
-
-    finally:
-        print("Closing server")
-        timer.deinit()
-        listen_socket.close()
-
-if __name__ == "__main__":
-    serve()
+        print('Server terminated in response to Ctrl-C')
