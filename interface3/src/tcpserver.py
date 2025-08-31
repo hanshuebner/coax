@@ -1,3 +1,4 @@
+import collections
 import asyncio
 import socket
 import struct
@@ -24,6 +25,15 @@ RESP_TIMEOUT = 0x02
 RESP_INVALID_CMD = 0x03
 RESP_INVALID_LENGTH = 0x04
 
+# Manchester encoded commands for poll snooping
+POLL_COMMAND_DATA     = b'\x05\x00'
+POLL_ACK_COMMAND_DATA = b'E\x00'
+
+# Predefined responses
+EMPTY_RESPONSE_DATA   = b'\x00\x00'
+
+client_connected = False
+
 async def send_response(writer, resp_code, data):
     """
     Send a response directly to the TCP connection: [16-bit length][8-bit resp_code][data]
@@ -37,26 +47,44 @@ async def send_response(writer, resp_code, data):
         writer.write(data)
         writer.drain()
 
-async def handle_transact_command(writer, data):
+poll_response_queue = collections.deque((), 20, 1)
+
+last_command = None
+last_response = None
+
+async def handle_transact_command(writer, command):
     """
-    Handle transact command - send data to coax interface
+    Handle transact command - send command to coax interface and receive response
     """
+    global last_command, last_response
+    global poll_response_queue
+
+    if command == POLL_COMMAND_DATA:
+        await send_response(writer, RESP_OK,
+                            poll_response_queue.popleft() if len(poll_response_queue) else EMPTY_RESPONSE_DATA)
+        return
+    elif command == POLL_ACK_COMMAND_DATA:
+        await send_response(writer, RESP_OK, EMPTY_RESPONSE_DATA)
+        return
+
     try:
         # Validate data length (must be even for coax protocol)
-        if len(data) % 2 != 0:
-            await send_response(writer, RESP_ERROR, b"Data length must be even")
+        if len(command) % 2 != 0:
+            await send_response(writer, RESP_ERROR, b"Command length must be even")
             return
 
         # Perform coax transaction
-        timeout = 1000  # Default timeout
-        rx_data = coax.transact(data, timeout=timeout)
+        response = coax.transact(command)
+        if command != last_command or response != last_response:
+            print('> ', command, ' < ', response)
+            last_command = command
+            last_response = response
 
-        # Limit response size and send directly
-        resp_len = min(len(rx_data), MAX_FRAME_SIZE - 3)
-        response_data = rx_data[:resp_len]
+        # Limit response size
+        response_len = min(len(response), MAX_FRAME_SIZE - 3)
 
         leds['ERR'].off()
-        await send_response(writer, RESP_OK, response_data)
+        await send_response(writer, RESP_OK, response[:response_len])
 
     except coax.Timeout:
         leds['ERR'].on()
@@ -109,8 +137,21 @@ async def handle_client(reader, writer):
     """
     Handle a single client connection
     """
-    print("Client connected")
+    global client_connected
 
+    host, port = reader.get_extra_info('peername')
+    print(f'Client {host}:{port} connected')
+
+    if client_connected:
+        await send_response(writer, RESP_ERROR, "Another client is already connected".encode())
+        reader.close()
+        writer.close()
+        await reader.wait_closed()
+        await writer.wait_closed()
+        print("Client connection closed - Controller busy")
+        return
+
+    client_connected = True
     try:
         while True:
             # Read command
@@ -140,9 +181,10 @@ async def handle_client(reader, writer):
     finally:
         reader.close()
         writer.close()
-        await reader.wait_close()
-        await writer.wait_close()
+        await reader.wait_closed()
+        await writer.wait_closed()
         print("Client connection closed")
+        client_connected = False
 
 async def serve_incoming_connections():
     server = asyncio.start_server(handle_client, '0.0.0.0', TCP_PORT)
@@ -151,12 +193,27 @@ async def serve_incoming_connections():
         leds['STS'].toggle()
         await asyncio.sleep_ms(1000)
 
+async def poll_keyboard():
+    global poll_response_queue
+    while True:
+        response = coax.transact(POLL_COMMAND_DATA)
+        if response != EMPTY_RESPONSE_DATA:
+            poll_response_queue.append(response)
+            print('appending poll response to queue', response)
+            response = coax.transact(POLL_ACK_COMMAND_DATA)
+            if response != EMPTY_RESPONSE_DATA:
+                print('unexpected response to poll ack', response)
+        await asyncio.sleep_ms(10)
+
 def serve():
     """
     Start the TCP server
     """
     loop = asyncio.get_event_loop()
+
+    loop.create_task(poll_keyboard())
     loop.create_task(serve_incoming_connections())
+
     try:
         loop.run_forever()
     except Exception as e:
