@@ -62,6 +62,7 @@ class TcpInterface(Interface):
         if self.socket is None:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.host, self.port))
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def _pack_frame(self, cmd_code, data):
         """
