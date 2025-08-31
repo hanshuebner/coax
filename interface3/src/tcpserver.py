@@ -203,7 +203,7 @@ async def poll_keyboard():
             response = coax.transact(POLL_ACK_COMMAND_DATA)
             if response != EMPTY_RESPONSE_DATA:
                 print('unexpected response to poll ack', response)
-        await asyncio.sleep_ms(10)
+        await asyncio.sleep_ms(3)
 
 def serve():
     """
