@@ -491,5 +491,88 @@ class TcpInterfaceContextManagerTestCase(unittest.TestCase):
         mock_interface.close.assert_called_once()
 
 
+class TcpInterfaceServerTestCase(unittest.TestCase):
+    def setUp(self):
+        self.interface = TcpInterface("localhost", 8080)
+
+    def tearDown(self):
+        self.interface.close()
+
+    @patch('socket.socket')
+    def test_start_server(self, mock_socket_class):
+        # Arrange
+        mock_socket = Mock()
+        mock_socket_class.return_value = mock_socket
+
+        # Act
+        self.interface.start_server()
+
+        # Assert
+        mock_socket_class.assert_called_once_with(socket.AF_INET, socket.SOCK_STREAM)
+        mock_socket.setsockopt.assert_called_with(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        mock_socket.bind.assert_called_once_with(("localhost", 8080))
+        mock_socket.listen.assert_called_once_with(1)
+        mock_socket.settimeout.assert_called_once_with(1.0)
+        self.assertTrue(self.interface.running)
+        self.assertIsNotNone(self.interface.server_thread)
+
+    def test_start_server_already_running(self):
+        # Arrange
+        self.interface.server_socket = Mock()
+        self.interface.running = True
+
+        # Act
+        self.interface.start_server()
+
+        # Assert - should not create new server
+        self.assertTrue(self.interface.running)
+
+    def test_stop_server(self):
+        # Arrange
+        self.interface.server_socket = Mock()
+        self.interface.client_socket = Mock()
+        self.interface.running = True
+        self.interface.connected = True
+
+        # Act
+        self.interface.stop_server()
+
+        # Assert
+        self.assertFalse(self.interface.running)
+        self.assertFalse(self.interface.connected)
+        self.interface.server_socket.close.assert_called_once()
+        self.interface.client_socket.close.assert_called_once()
+
+    def test_close_calls_stop_server(self):
+        # Arrange
+        self.interface.server_socket = Mock()
+        self.interface.client_socket = Mock()
+        self.interface.running = True
+        self.interface.connected = True
+
+        # Act
+        self.interface.close()
+
+        # Assert
+        self.assertFalse(self.interface.running)
+        self.assertFalse(self.interface.connected)
+
+    def test_wait_for_connection_timeout(self):
+        # Act and assert
+        with self.assertRaises(TimeoutError):
+            self.interface.wait_for_connection(timeout=0.1)
+
+    def test_is_connected(self):
+        # Assert initial state
+        self.assertFalse(self.interface.is_connected())
+
+        # Arrange
+        self.interface.connected = True
+
+        # Assert
+        self.assertTrue(self.interface.is_connected())
+
+
 if __name__ == '__main__':
     unittest.main()
+

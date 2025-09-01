@@ -5,6 +5,8 @@ coax.tcp_interface
 import struct
 import socket
 import re
+import threading
+import time
 from contextlib import contextmanager
 
 from .exceptions import ReceiveError, InterfaceError, ReceiveTimeout
@@ -22,9 +24,9 @@ def split_host_port(s):
     return host, port
 
 class TcpInterface(Interface):
-    """TCP attached 3270 coax interface."""
+    """TCP server 3270 coax interface that accepts incoming connections."""
 
-    # Protocol constants (must match server)
+    # Protocol constants (must match client)
     TCP_PORT = 3174
     MAX_FRAME_SIZE = 4300
 
@@ -39,30 +41,79 @@ class TcpInterface(Interface):
     RESP_INVALID_CMD = 0x03
     RESP_INVALID_LENGTH = 0x04
 
-    def __init__(self, host, port=None):
-        if host is None:
-            raise ValueError('Host is required')
-
+    def __init__(self, host="0.0.0.0", port=None):
         super().__init__()
 
         self.host = host
         self.port = port or self.TCP_PORT
-        self.socket = None
+        self.server_socket = None
+        self.client_socket = None
+        self.server_thread = None
+        self.running = False
+        self.connected = False
+        self.connection_lock = threading.Lock()
 
     def identifier(self):
         return f"{self.host}:{self.port}"
 
+    def start_server(self):
+        """Start the TCP server to accept incoming connections."""
+        if self.server_socket is not None:
+            return  # Already running
+
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(1)
+        self.server_socket.settimeout(1.0)  # 1 second timeout for accept
+
+        self.running = True
+        self.server_thread = threading.Thread(target=self._accept_connections, daemon=True)
+        self.server_thread.start()
+
+    def stop_server(self):
+        """Stop the TCP server."""
+        self.running = False
+        if self.server_socket:
+            self.server_socket.close()
+            self.server_socket = None
+
+        if self.client_socket:
+            self.client_socket.close()
+            self.client_socket = None
+
+        self.connected = False
+
+    def _accept_connections(self):
+        """Accept incoming connections in a separate thread."""
+        while self.running:
+            try:
+                client_socket, client_address = self.server_socket.accept()
+                with self.connection_lock:
+                    if self.client_socket:
+                        # Close existing connection
+                        self.client_socket.close()
+
+                    self.client_socket = client_socket
+                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    self.connected = True
+                    print(f"Client connected from {client_address}")
+
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    print(f"Error accepting connection: {e}")
+                break
+
     def close(self):
-        if self.socket:
-            self.socket.close()
-            self.socket = None
+        """Close the interface and stop the server."""
+        self.stop_server()
 
     def _ensure_connected(self):
-        """Ensure socket is connected."""
-        if self.socket is None:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((self.host, self.port))
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        """Ensure a client is connected."""
+        if not self.connected or self.client_socket is None:
+            raise InterfaceError("No client connected")
 
     def _pack_frame(self, cmd_code, data):
         """
@@ -95,17 +146,17 @@ class TcpInterface(Interface):
 
         # Set socket timeout if specified
         if timeout is not None:
-            self.socket.settimeout(timeout)
+            self.client_socket.settimeout(timeout)
 
         # Pack and send command
         frame = self._pack_frame(cmd_code, data)
-        self.socket.send(frame)
+        self.client_socket.send(frame)
 
         # Read response length (2 bytes)
         bytes_received = 0
         length_data = bytearray(2)
         while bytes_received < 2:
-            chunk = self.socket.recv(2 - bytes_received)
+            chunk = self.client_socket.recv(2 - bytes_received)
             if len(chunk) == 0:
                 raise ConnectionError("Connection closed")
             length_data[bytes_received:bytes_received + len(chunk)] = chunk
@@ -117,7 +168,7 @@ class TcpInterface(Interface):
         bytes_received = 0
         response_data = bytearray(frame_len)
         while bytes_received < frame_len:
-            chunk = self.socket.recv(frame_len - bytes_received)
+            chunk = self.client_socket.recv(frame_len - bytes_received)
             if len(chunk) == 0:
                 raise ConnectionError("Connection closed")
             response_data[bytes_received:bytes_received + len(chunk)] = chunk
@@ -135,7 +186,10 @@ class TcpInterface(Interface):
         responses = []
         for frame in frames:
             address, message = frame
-            if message == b'E\x00': # PollAck:
+            # Check if this is a PollAck command (FrameFormat.WORD_DATA with POLL_ACK command)
+            if (len(message) == 2 and
+                message[0] == 0x00 and
+                message[1] == 0x11):  # POLL_ACK command word
                 # PollAck is generated by the interface automatically
                 responses.append(_decode_frame(b'\x00\x00')) # Always succeed
             else:
@@ -162,6 +216,18 @@ class TcpInterface(Interface):
 
         return responses
 
+    def wait_for_connection(self, timeout=None):
+        """Wait for a client to connect."""
+        start_time = time.time()
+        while not self.connected:
+            if timeout is not None and (time.time() - start_time) > timeout:
+                raise TimeoutError("Timeout waiting for client connection")
+            time.sleep(0.1)
+
+    def is_connected(self):
+        """Check if a client is currently connected."""
+        return self.connected
+
 
 def _normalize_and_expand_frame(frame):
     (words, repeat_count, repeat_offset) = normalize_frame(frame)
@@ -182,11 +248,12 @@ def _decode_frame(message):
 
 
 @contextmanager
-def open_tcp_interface(spec):
-    """Returns a 3270 coax interface connected through TCP."""
-    host, port = split_host_port(spec)
+def open_tcp_interface(spec=None):
+    """Returns a 3270 coax TCP server interface."""
+    host, port = split_host_port(spec) if spec else ("0.0.0.0", None)
     interface = TcpInterface(host, port)
     try:
+        interface.start_server()
         yield interface
     finally:
         interface.close()
