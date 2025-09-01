@@ -108,12 +108,35 @@ class TcpInterface(Interface):
 
     def close(self):
         """Close the interface and stop the server."""
+        self.running = False
         self.stop_server()
 
     def _ensure_connected(self):
         """Ensure a client is connected."""
         if not self.connected or self.client_socket is None:
-            raise InterfaceError("No client connected")
+            # Instead of raising an error, wait for reconnection
+            self._wait_for_reconnection()
+
+    def _handle_connection_loss(self):
+        """Handle connection loss by marking as disconnected."""
+        with self.connection_lock:
+            if self.client_socket:
+                try:
+                    self.client_socket.close()
+                except:
+                    pass
+                self.client_socket = None
+            self.connected = False
+            print("Client disconnected, waiting for reconnection...")
+
+    def _wait_for_reconnection(self):
+        """Wait for a client to reconnect."""
+        print("Waiting for client to reconnect...")
+        while not self.connected and self.running:
+            time.sleep(0.1)  # Wait for reconnection
+        if not self.running:
+            raise InterfaceError("Interface is shutting down")
+        print("Client reconnected!")
 
     def _pack_frame(self, cmd_code, data):
         """
@@ -150,17 +173,23 @@ class TcpInterface(Interface):
 
         # Pack and send command
         frame = self._pack_frame(cmd_code, data)
-        self.client_socket.send(frame)
+        try:
+            self.client_socket.send(frame)
+        except (socket.error, ConnectionError):
+            raise ConnectionError("Connection lost during send")
 
         # Read response length (2 bytes)
         bytes_received = 0
         length_data = bytearray(2)
         while bytes_received < 2:
-            chunk = self.client_socket.recv(2 - bytes_received)
-            if len(chunk) == 0:
-                raise ConnectionError("Connection closed")
-            length_data[bytes_received:bytes_received + len(chunk)] = chunk
-            bytes_received += len(chunk)
+            try:
+                chunk = self.client_socket.recv(2 - bytes_received)
+                if len(chunk) == 0:
+                    raise ConnectionError("Connection closed")
+                length_data[bytes_received:bytes_received + len(chunk)] = chunk
+                bytes_received += len(chunk)
+            except (socket.error, ConnectionError):
+                raise ConnectionError("Connection lost during read")
 
         frame_len = struct.unpack("<H", length_data)[0]
 
@@ -168,17 +197,24 @@ class TcpInterface(Interface):
         bytes_received = 0
         response_data = bytearray(frame_len)
         while bytes_received < frame_len:
-            chunk = self.client_socket.recv(frame_len - bytes_received)
-            if len(chunk) == 0:
-                raise ConnectionError("Connection closed")
-            response_data[bytes_received:bytes_received + len(chunk)] = chunk
-            bytes_received += len(chunk)
+            try:
+                chunk = self.client_socket.recv(frame_len - bytes_received)
+                if len(chunk) == 0:
+                    raise ConnectionError("Connection closed")
+                response_data[bytes_received:bytes_received + len(chunk)] = chunk
+                bytes_received += len(chunk)
+            except (socket.error, ConnectionError):
+                raise ConnectionError("Connection lost during read")
 
         return self._unpack_response(frame_len, response_data)
 
     def _transmit_receive(self, outbound_frames, response_lengths, timeout):
         if len(response_lengths) != len(outbound_frames):
             raise ValueError('Response lengths length must equal outbound frames length')
+
+        # Check if we need to wait for reconnection before processing any frames
+        if not self.connected:
+            self._wait_for_reconnection()
 
         # Expand messages before sending.
         frames = [(address, _normalize_and_expand_frame(frame)) for (address, frame) in outbound_frames]
@@ -212,7 +248,20 @@ class TcpInterface(Interface):
                 except socket.timeout:
                     responses.append(ReceiveTimeout())
                 except (socket.error, ConnectionError) as e:
-                    responses.append(InterfaceError(str(e)))
+                    # Handle connection loss gracefully - mark as disconnected and wait for reconnection
+                    self._handle_connection_loss()
+                    # Wait for reconnection and then retry the command
+                    try:
+                        self._wait_for_reconnection()
+                        # Retry the command after reconnection
+                        resp_code, data = self._send_command(self.CMD_TRANSACT, message, timeout)
+                        if resp_code == self.RESP_OK:
+                            responses.append(_decode_frame(data))
+                        else:
+                            responses.append(ReceiveTimeout())  # Use timeout for other errors
+                    except Exception:
+                        # If retry fails, use timeout to keep program running
+                        responses.append(ReceiveTimeout())
 
         return responses
 
@@ -227,6 +276,15 @@ class TcpInterface(Interface):
     def is_connected(self):
         """Check if a client is currently connected."""
         return self.connected
+
+    def get_connection_status(self):
+        """Get detailed connection status."""
+        return {
+            'connected': self.connected,
+            'running': self.running,
+            'host': self.host,
+            'port': self.port
+        }
 
 
 def _normalize_and_expand_frame(frame):
