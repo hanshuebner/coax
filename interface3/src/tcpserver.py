@@ -1,10 +1,8 @@
-import collections
 import asyncio
 import socket
 import struct
 import gc
 from machine import Pin
-import wifi
 import coax
 from leds import leds
 import config
@@ -25,6 +23,7 @@ RESP_ERROR = 0x01
 RESP_TIMEOUT = 0x02
 RESP_INVALID_CMD = 0x03
 RESP_INVALID_LENGTH = 0x04
+RESP_POLL = 0x05
 
 # Manchester encoded commands for poll snooping
 POLL_COMMAND_DATA     = b'\x05\x00'
@@ -48,8 +47,6 @@ async def send_response(writer, resp_code, data):
         writer.write(data)
         writer.drain()
 
-poll_response_queue = collections.deque((), 20, 1)
-
 last_command = None
 last_response = None
 
@@ -58,13 +55,9 @@ async def handle_transact_command(writer, command):
     Handle transact command - send command to coax interface and receive response
     """
     global last_command, last_response
-    global poll_response_queue
 
-    if command == POLL_COMMAND_DATA:
-        await send_response(writer, RESP_OK,
-                            poll_response_queue.popleft() if len(poll_response_queue) else EMPTY_RESPONSE_DATA)
-        return
-    elif command == POLL_ACK_COMMAND_DATA:
+    if command == POLL_COMMAND_DATA or command == POLL_ACK_COMMAND_DATA:
+        print('unexpected poll command received over TCP, responding empty')
         await send_response(writer, RESP_OK, EMPTY_RESPONSE_DATA)
         return
 
@@ -139,7 +132,9 @@ async def handle_oec_connection(reader, writer):
     """
     Handle a single OEC connection
     """
+    keyboard_poller = None
     try:
+        keyboard_poller = loop.create_task(poll_keyboard(writer))
         while True:
             # Read command
             result = await read_command(reader)
@@ -166,6 +161,7 @@ async def handle_oec_connection(reader, writer):
         print(f"OEC error: {e}")
 
     finally:
+        keyboard_poller.cancel()
         reader.close()
         writer.close()
         await reader.wait_closed()
@@ -188,27 +184,25 @@ async def connect_to_server():
         except Exception as e:
             print(f"Cannot connect to {host}:{port}: {e}")
 
-async def poll_keyboard():
-    global poll_response_queue
+async def poll_keyboard(writer):
     while True:
         try:
             response = coax.transact(POLL_COMMAND_DATA)
             if response != EMPTY_RESPONSE_DATA:
-                poll_response_queue.append(response)
-                print('appending poll response to queue', response)
-                response = coax.transact(POLL_ACK_COMMAND_DATA)
-                if response != EMPTY_RESPONSE_DATA:
-                    print('unexpected response to poll ack', response)
+                ack_response = coax.transact(POLL_ACK_COMMAND_DATA)
+                if ack_response != EMPTY_RESPONSE_DATA:
+                    print('unexpected response to poll ack', ack_response)
+                print('sending poll response to oec server: ', response)
+                send_response(writer, RESP_POLL, response)
         except coax.Timeout:
             print("Timeout waiting for terminal response on coax interface")
         await asyncio.sleep_ms(3)
 
 def serve():
     """
-    Start the TCP server
+    Start the TCP connector
     """
 
-    loop.create_task(poll_keyboard())
     loop.create_task(connect_to_server())
 
     try:

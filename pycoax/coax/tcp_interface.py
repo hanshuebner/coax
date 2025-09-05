@@ -7,6 +7,7 @@ import socket
 import re
 import threading
 import time
+import queue
 from contextlib import contextmanager
 
 from .exceptions import ReceiveError, InterfaceError, ReceiveTimeout
@@ -49,9 +50,15 @@ class TcpInterface(Interface):
         self.server_socket = None
         self.client_socket = None
         self.server_thread = None
+        self.receiver_thread = None
         self.running = False
         self.connected = False
         self.connection_lock = threading.Lock()
+
+        # Queue for incoming messages from the receiver thread
+        self.message_queue = queue.Queue()
+        self.receiver_running = False
+        self.receiver_lock = threading.Lock()
 
     def identifier(self):
         return f"{self.host}:{self.port}"
@@ -74,6 +81,10 @@ class TcpInterface(Interface):
     def stop_server(self):
         """Stop the TCP server."""
         self.running = False
+
+        # Stop receiver thread
+        self._stop_receiver_thread()
+
         if self.server_socket:
             self.server_socket.close()
             self.server_socket = None
@@ -94,11 +105,15 @@ class TcpInterface(Interface):
                     if self.client_socket:
                         # Close existing connection
                         self.client_socket.close()
+                        self._stop_receiver_thread()
 
                     self.client_socket = client_socket
                     self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     self.connected = True
                     print(f"Client connected from {client_address}")
+
+                    # Start receiver thread for this connection
+                    self._start_receiver_thread()
 
             except socket.timeout:
                 continue
@@ -131,6 +146,9 @@ class TcpInterface(Interface):
             self.connected = False
             print("Client disconnected, waiting for reconnection...")
 
+        # Stop receiver thread when connection is lost
+        self._stop_receiver_thread()
+
     def _wait_for_reconnection(self):
         """Wait for a client to reconnect."""
         print("Waiting for client to reconnect...")
@@ -142,6 +160,101 @@ class TcpInterface(Interface):
         if not self.running:
             raise InterfaceError("Interface is shutting down")
         print("Client reconnected!")
+
+    def _start_receiver_thread(self):
+        """Start the receiver thread for reading messages from the client socket."""
+        with self.receiver_lock:
+            if self.receiver_running:
+                return  # Already running
+
+            self.receiver_running = True
+            self.receiver_thread = threading.Thread(target=self._receiver_loop, daemon=True)
+            self.receiver_thread.start()
+
+    def _stop_receiver_thread(self):
+        """Stop the receiver thread."""
+        with self.receiver_lock:
+            if not self.receiver_running:
+                return  # Already stopped
+
+            self.receiver_running = False
+
+        # Wait for receiver thread to finish
+        if self.receiver_thread and self.receiver_thread.is_alive():
+            self.receiver_thread.join(timeout=1.0)
+
+    def _receiver_loop(self):
+        """Background thread that continuously reads messages from the client socket."""
+        while self.receiver_running:
+            try:
+                with self.connection_lock:
+                    if not self.connected or self.client_socket is None:
+                        break
+                    socket_to_use = self.client_socket
+
+                if socket_to_use is None:
+                    break
+
+                # Set a timeout for the socket to allow checking receiver_running
+                socket_to_use.settimeout(0.1)
+
+                # Read message length (2 bytes)
+                length_data = bytearray(2)
+                bytes_received = 0
+                while bytes_received < 2 and self.receiver_running:
+                    try:
+                        chunk = socket_to_use.recv(2 - bytes_received)
+                        if len(chunk) == 0:
+                            # Connection closed
+                            self._handle_connection_loss()
+                            break
+                        length_data[bytes_received:bytes_received + len(chunk)] = chunk
+                        bytes_received += len(chunk)
+                    except socket.timeout:
+                        continue  # Check receiver_running and try again
+                    except (socket.error, ConnectionError):
+                        self._handle_connection_loss()
+                        break
+
+                if not self.receiver_running or bytes_received < 2:
+                    break
+
+                frame_len = struct.unpack("<H", length_data)[0]
+
+                # Read response data
+                response_data = bytearray(frame_len)
+                bytes_received = 0
+                while bytes_received < frame_len and self.receiver_running:
+                    try:
+                        chunk = socket_to_use.recv(frame_len - bytes_received)
+                        if len(chunk) == 0:
+                            # Connection closed
+                            self._handle_connection_loss()
+                            break
+                        response_data[bytes_received:bytes_received + len(chunk)] = chunk
+                        bytes_received += len(chunk)
+                    except socket.timeout:
+                        continue  # Check receiver_running and try again
+                    except (socket.error, ConnectionError):
+                        self._handle_connection_loss()
+                        break
+
+                if not self.receiver_running or bytes_received < frame_len:
+                    break
+
+                # Put the complete message on the queue
+                try:
+                    resp_code, data = self._unpack_response(frame_len, response_data)
+                    self.message_queue.put((resp_code, data), timeout=0.1)
+                except queue.Full:
+                    # Queue is full, drop the message (this shouldn't happen in normal operation)
+                    print("Warning: Message queue is full, dropping message")
+
+            except Exception as e:
+                if self.receiver_running:
+                    print(f"Error in receiver loop: {e}")
+                    self._handle_connection_loss()
+                break
 
     def _pack_frame(self, cmd_code, data):
         """
@@ -168,13 +281,9 @@ class TcpInterface(Interface):
 
     def _send_command(self, cmd_code, data=b"", timeout=None):
         """
-        Send a command and receive response
+        Send a command and receive response from the message queue
         """
         self._ensure_connected()
-
-        # Set socket timeout if specified
-        if timeout is not None:
-            self.client_socket.settimeout(timeout)
 
         # Pack and send command
         frame = self._pack_frame(cmd_code, data)
@@ -183,35 +292,15 @@ class TcpInterface(Interface):
         except (socket.error, ConnectionError):
             raise ConnectionError("Connection lost during send")
 
-        # Read response length (2 bytes)
-        bytes_received = 0
-        length_data = bytearray(2)
-        while bytes_received < 2:
-            try:
-                chunk = self.client_socket.recv(2 - bytes_received)
-                if len(chunk) == 0:
-                    raise ConnectionError("Connection closed")
-                length_data[bytes_received:bytes_received + len(chunk)] = chunk
-                bytes_received += len(chunk)
-            except (socket.error, ConnectionError):
-                raise ConnectionError("Connection lost during read")
-
-        frame_len = struct.unpack("<H", length_data)[0]
-
-        # Read response data
-        bytes_received = 0
-        response_data = bytearray(frame_len)
-        while bytes_received < frame_len:
-            try:
-                chunk = self.client_socket.recv(frame_len - bytes_received)
-                if len(chunk) == 0:
-                    raise ConnectionError("Connection closed")
-                response_data[bytes_received:bytes_received + len(chunk)] = chunk
-                bytes_received += len(chunk)
-            except (socket.error, ConnectionError):
-                raise ConnectionError("Connection lost during read")
-
-        return self._unpack_response(frame_len, response_data)
+        # Wait for response from the message queue
+        try:
+            if timeout is not None:
+                resp_code, response_data = self.message_queue.get(timeout=timeout)
+            else:
+                resp_code, response_data = self.message_queue.get()
+            return resp_code, response_data
+        except queue.Empty:
+            raise ReceiveTimeout("Timeout waiting for response")
 
     def _transmit_receive(self, outbound_frames, response_lengths, timeout):
         if len(response_lengths) != len(outbound_frames):
