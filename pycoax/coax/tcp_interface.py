@@ -54,13 +54,10 @@ class TcpInterface(Interface):
         self.receiver_thread = None
         self.running = False
         self.connected = False
-        self.connection_lock = threading.Lock()
-
         # Queue for response messages from the receiver thread
         self.response_queue = queue.Queue()
         self.poll_response_queue = queue.Queue()
         self.receiver_running = False
-        self.receiver_lock = threading.Lock()
 
     def identifier(self):
         return f"{self.host}:{self.port}"
@@ -95,27 +92,25 @@ class TcpInterface(Interface):
             self.client_socket.close()
             self.client_socket = None
 
-        with self.connection_lock:
-            self.connected = False
+        self.connected = False
 
     def _accept_connections(self):
         """Accept incoming connections."""
         while self.running:
             try:
                 client_socket, client_address = self.server_socket.accept()
-                with self.connection_lock:
-                    if self.client_socket:
-                        # Close existing connection
-                        self.client_socket.close()
-                        self._stop_receiver_thread()
+                if self.client_socket:
+                    # Close existing connection
+                    self.client_socket.close()
+                    self._stop_receiver_thread()
 
-                    self.client_socket = client_socket
-                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                    self.connected = True
-                    print(f"Client connected from {client_address}")
+                self.client_socket = client_socket
+                self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.connected = True
+                print(f"Client connected from {client_address}")
 
-                    # Start receiver thread for this connection
-                    self._start_receiver_thread()
+                # Start receiver thread for this connection
+                self._start_receiver_thread()
 
             except socket.timeout:
                 continue
@@ -131,22 +126,20 @@ class TcpInterface(Interface):
 
     def _ensure_connected(self):
         """Ensure a client is connected."""
-        with self.connection_lock:
-            if not self.connected or self.client_socket is None:
-                # Instead of raising an error, wait for reconnection
-                self._wait_for_reconnection()
+        if not self.connected or self.client_socket is None:
+            # Instead of raising an error, wait for reconnection
+            self._wait_for_reconnection()
 
     def _handle_connection_loss(self):
         """Handle connection loss by marking as disconnected."""
-        with self.connection_lock:
-            if self.client_socket:
-                try:
-                    self.client_socket.close()
-                except:
-                    pass
-                self.client_socket = None
-            self.connected = False
-            print("Client disconnected, waiting for reconnection...")
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+            except:
+                pass
+            self.client_socket = None
+        self.connected = False
+        print("Client disconnected, waiting for reconnection...")
 
         # Stop receiver thread when connection is lost
         self._stop_receiver_thread()
@@ -155,9 +148,8 @@ class TcpInterface(Interface):
         """Wait for a client to reconnect."""
         print("Waiting for client to reconnect...")
         while True:
-            with self.connection_lock:
-                if self.connected or not self.running:
-                    break
+            if self.connected or not self.running:
+                break
             time.sleep(0.1)  # Wait for reconnection
         if not self.running:
             raise InterfaceError("Interface is shutting down")
@@ -165,21 +157,19 @@ class TcpInterface(Interface):
 
     def _start_receiver_thread(self):
         """Start the receiver thread for reading messages from the client socket."""
-        with self.receiver_lock:
-            if self.receiver_running:
-                return  # Already running
+        if self.receiver_running:
+            return  # Already running
 
-            self.receiver_running = True
-            self.receiver_thread = threading.Thread(target=self._receiver_loop, daemon=True)
-            self.receiver_thread.start()
+        self.receiver_running = True
+        self.receiver_thread = threading.Thread(target=self._receiver_loop, daemon=True)
+        self.receiver_thread.start()
 
     def _stop_receiver_thread(self):
         """Stop the receiver thread."""
-        with self.receiver_lock:
-            if not self.receiver_running:
-                return  # Already stopped
+        if not self.receiver_running:
+            return  # Already stopped
 
-            self.receiver_running = False
+        self.receiver_running = False
 
         # Wait for receiver thread to finish
         if self.receiver_thread and self.receiver_thread.is_alive():
@@ -189,10 +179,9 @@ class TcpInterface(Interface):
         """Background thread that continuously reads messages from the client socket."""
         while self.receiver_running:
             try:
-                with self.connection_lock:
-                    if not self.connected or self.client_socket is None:
-                        break
-                    socket_to_use = self.client_socket
+                if not self.connected or self.client_socket is None:
+                    break
+                socket_to_use = self.client_socket
 
                 if socket_to_use is None:
                     break
@@ -319,9 +308,8 @@ class TcpInterface(Interface):
             raise ValueError('Response lengths length must equal outbound frames length')
 
         # Check if we need to wait for reconnection before processing any frames
-        with self.connection_lock:
-            if not self.connected:
-                self._wait_for_reconnection()
+        if not self.connected:
+            self._wait_for_reconnection()
 
         # Expand messages before sending.
         frames = [(address, _normalize_and_expand_frame(frame)) for (address, frame) in outbound_frames]
@@ -376,27 +364,24 @@ class TcpInterface(Interface):
         """Wait for a client to connect."""
         start_time = time.time()
         while True:
-            with self.connection_lock:
-                if self.connected:
-                    break
+            if self.connected:
+                break
             if timeout is not None and (time.time() - start_time) > timeout:
                 raise TimeoutError("Timeout waiting for client connection")
             time.sleep(0.1)
 
     def is_connected(self):
         """Check if a client is currently connected."""
-        with self.connection_lock:
-            return self.connected
+        return self.connected
 
     def get_connection_status(self):
         """Get detailed connection status."""
-        with self.connection_lock:
-            return {
-                'connected': self.connected,
-                'running': self.running,
-                'host': self.host,
-                'port': self.port
-            }
+        return {
+            'connected': self.connected,
+            'running': self.running,
+            'host': self.host,
+            'port': self.port
+        }
 
 
 def _normalize_and_expand_frame(frame):
