@@ -45,7 +45,7 @@ async def send_response(writer, resp_code, data):
     writer.write(struct.pack("<HB", frame_len, resp_code))
     if data:
         writer.write(data)
-        writer.drain()
+    writer.drain()
 
 last_command = None
 last_response = None
@@ -110,7 +110,6 @@ async def read_command(reader):
     Returns (cmd_code, data) or None if connection closed
     """
     len_buf = await reader.readexactly(2)
-    print('read length ', len_buf)
     frame_len = struct.unpack("<H", len_buf)[0]
 
     # Validate frame length
@@ -183,6 +182,7 @@ async def connect_to_server():
             await asyncio.sleep_ms(1000)
         except Exception as e:
             print(f"Cannot connect to {host}:{port}: {e}")
+            await asyncio.sleep_ms(1000)
 
 async def poll_keyboard(writer):
     while True:
@@ -192,8 +192,7 @@ async def poll_keyboard(writer):
                 ack_response = coax.transact(POLL_ACK_COMMAND_DATA)
                 if ack_response != EMPTY_RESPONSE_DATA:
                     print('unexpected response to poll ack', ack_response)
-                print('sending poll response to oec server: ', response)
-                send_response(writer, RESP_POLL, response)
+                await send_response(writer, RESP_POLL, response)
         except coax.Timeout:
             print("Timeout waiting for terminal response on coax interface")
         await asyncio.sleep_ms(3)

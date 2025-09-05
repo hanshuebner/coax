@@ -41,6 +41,7 @@ class TcpInterface(Interface):
     RESP_TIMEOUT = 0x02
     RESP_INVALID_CMD = 0x03
     RESP_INVALID_LENGTH = 0x04
+    RESP_POLL = 0x05
 
     def __init__(self, host="0.0.0.0", port=None):
         super().__init__()
@@ -55,8 +56,9 @@ class TcpInterface(Interface):
         self.connected = False
         self.connection_lock = threading.Lock()
 
-        # Queue for incoming messages from the receiver thread
-        self.message_queue = queue.Queue()
+        # Queue for response messages from the receiver thread
+        self.response_queue = queue.Queue()
+        self.poll_response_queue = queue.Queue()
         self.receiver_running = False
         self.receiver_lock = threading.Lock()
 
@@ -245,7 +247,11 @@ class TcpInterface(Interface):
                 # Put the complete message on the queue
                 try:
                     resp_code, data = self._unpack_response(frame_len, response_data)
-                    self.message_queue.put((resp_code, data), timeout=0.1)
+                    if resp_code == self.RESP_POLL:
+                        # Poll response, handle separately if needed
+                        self.poll_response_queue.put(data, timeout=0.1)
+                    else:
+                        self.response_queue.put((resp_code, data), timeout=0.1)
                 except queue.Full:
                     # Queue is full, drop the message (this shouldn't happen in normal operation)
                     print("Warning: Message queue is full, dropping message")
@@ -285,6 +291,12 @@ class TcpInterface(Interface):
         """
         self._ensure_connected()
 
+        if cmd_code == 1 and data == b"\x05\x00":
+            if self.poll_response_queue.empty():
+                return self.RESP_OK, b'\x00\x00'
+            else:
+                return self.RESP_OK, self.poll_response_queue.get()
+
         # Pack and send command
         frame = self._pack_frame(cmd_code, data)
         try:
@@ -295,9 +307,9 @@ class TcpInterface(Interface):
         # Wait for response from the message queue
         try:
             if timeout is not None:
-                resp_code, response_data = self.message_queue.get(timeout=timeout)
+                resp_code, response_data = self.response_queue.get(timeout=timeout)
             else:
-                resp_code, response_data = self.message_queue.get()
+                resp_code, response_data = self.response_queue.get()
             return resp_code, response_data
         except queue.Empty:
             raise ReceiveTimeout("Timeout waiting for response")
