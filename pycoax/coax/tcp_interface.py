@@ -172,12 +172,23 @@ class TcpInterface(Interface):
 
                 # Put the complete message on the queue
                 try:
+                    import time
+                    unpack_start = time.perf_counter()
                     resp_code, data = self._unpack_response(frame_len, response_data)
+                    unpack_time = time.perf_counter()
+                    unpack_duration = (unpack_time - unpack_start) * 1000
+
+                    queue_put_start = time.perf_counter()
                     if resp_code == self.RESP_POLL:
                         # Poll response, handle separately if needed
                         self.poll_response_queue.put(data, timeout=0.1)
                     else:
                         self.response_queue.put((resp_code, data), timeout=0.1)
+                    queue_put_time = time.perf_counter()
+                    queue_put_duration = (queue_put_time - queue_put_start) * 1000
+
+                    if unpack_duration > 1.0 or queue_put_duration > 1.0:
+                        print(f"TCP receiver: unpack={unpack_duration:.2f}ms, queue_put={queue_put_duration:.2f}ms, frame_len={frame_len}")
                 except queue.Full:
                     # Queue is full, drop the message (this shouldn't happen in normal operation)
                     print("Warning: Message queue is full, dropping message")
@@ -226,16 +237,28 @@ class TcpInterface(Interface):
         # Pack and send command
         frame = self._pack_frame(cmd_code, data)
         try:
-            self.client_socket.send(frame)
+            import time
+            send_start = time.perf_counter()
+            bytes_sent = self.client_socket.send(frame)
+            send_time = time.perf_counter()
+            send_duration = (send_time - send_start) * 1000
+            if send_duration > 1.0:  # Log if send takes more than 1ms
+                print(f"TCP send took {send_duration:.2f}ms, bytes={bytes_sent}, frame_len={len(frame)}, cmd={cmd_code}, data_len={len(data)}")
         except (socket.error, ConnectionError):
             raise ConnectionError("Connection lost during send")
 
         # Wait for response from the message queue
         try:
+            import time
+            queue_start = time.perf_counter()
             if timeout is not None:
                 resp_code, response_data = self.response_queue.get(timeout=timeout)
             else:
                 resp_code, response_data = self.response_queue.get()
+            queue_time = time.perf_counter()
+            queue_duration = (queue_time - queue_start) * 1000
+            if queue_duration > 1.0:  # Log if queue wait takes more than 1ms
+                print(f"TCP queue wait took {queue_duration:.2f}ms")
             return resp_code, response_data
         except queue.Empty:
             raise ReceiveTimeout("Timeout waiting for response")
