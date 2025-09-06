@@ -1,8 +1,6 @@
 from .__about__ import __version__
 
 from .interface import InterfaceFeature
-from .serial_interface import SerialInterface, open_serial_interface
-from .http_interface import HttpInterface, open_http_interface
 from .tcp_interface import TcpInterface, open_tcp_interface
 
 from .protocol import (

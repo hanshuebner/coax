@@ -25,7 +25,7 @@ def split_host_port(s):
     return host, port
 
 class TcpInterface(Interface):
-    """TCP server 3270 coax interface that accepts incoming connections."""
+    """TCP client 3270 coax interface for individual connections."""
 
     # Protocol constants (must match client)
     TCP_PORT = 3174
@@ -43,92 +43,40 @@ class TcpInterface(Interface):
     RESP_INVALID_LENGTH = 0x04
     RESP_POLL = 0x05
 
-    def __init__(self, host="0.0.0.0", port=None):
+    def __init__(self, client_socket):
         super().__init__()
 
-        self.host = host
-        self.port = port or self.TCP_PORT
-        self.server_socket = None
-        self.client_socket = None
-        self.server_thread = None
+        self.client_socket = client_socket
+        self.client_address = client_socket.getpeername()
         self.receiver_thread = None
-        self.running = False
-        self.connected = False
+        self.connected = True
         # Queue for response messages from the receiver thread
         self.response_queue = queue.Queue()
         self.poll_response_queue = queue.Queue()
         self.receiver_running = False
 
+        # Start the receiver thread for this connection
+        self._start_receiver_thread()
+
     def identifier(self):
-        return f"{self.host}:{self.port}"
-
-    def start_server(self):
-        """Start the TCP server to accept incoming connections."""
-        if self.server_socket is not None:
-            return  # Already running
-
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind((self.host, self.port))
-        self.server_socket.listen(1)
-        self.server_socket.settimeout(1.0)  # 1 second timeout for accept
-
-        self.running = True
-        self.server_thread = threading.Thread(target=self._accept_connections, daemon=True)
-        self.server_thread.start()
-
-    def stop_server(self):
-        """Stop the TCP server."""
-        self.running = False
-
-        # Stop receiver thread
-        self._stop_receiver_thread()
-
-        if self.server_socket:
-            self.server_socket.close()
-            self.server_socket = None
-
-        if self.client_socket:
-            self.client_socket.close()
-            self.client_socket = None
-
-        self.connected = False
-
-    def _accept_connections(self):
-        """Accept incoming connections."""
-        while self.running:
-            try:
-                client_socket, client_address = self.server_socket.accept()
-                if self.client_socket:
-                    # Close existing connection
-                    self.client_socket.close()
-                    self._stop_receiver_thread()
-
-                self.client_socket = client_socket
-                self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                self.connected = True
-                print(f"Client connected from {client_address}")
-
-                # Start receiver thread for this connection
-                self._start_receiver_thread()
-
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self.running:
-                    print(f"Error accepting connection: {e}")
-                break
+        return f"{self.client_address[0]}:{self.client_address[1]}"
 
     def close(self):
-        """Close the interface and stop the server."""
-        self.running = False
-        self.stop_server()
+        """Close the interface and stop the receiver thread."""
+        self.connected = False
+        self._stop_receiver_thread()
+
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+            except:
+                pass
+            self.client_socket = None
 
     def _ensure_connected(self):
         """Ensure a client is connected."""
         if not self.connected or self.client_socket is None:
-            # Instead of raising an error, wait for reconnection
-            self._wait_for_reconnection()
+            raise InterfaceError("Client connection lost")
 
     def _handle_connection_loss(self):
         """Handle connection loss by marking as disconnected."""
@@ -139,21 +87,10 @@ class TcpInterface(Interface):
                 pass
             self.client_socket = None
         self.connected = False
-        print("Client disconnected, waiting for reconnection...")
+        print(f"Client {self.client_address} disconnected")
 
         # Stop receiver thread when connection is lost
         self._stop_receiver_thread()
-
-    def _wait_for_reconnection(self):
-        """Wait for a client to reconnect."""
-        print("Waiting for client to reconnect...")
-        while True:
-            if self.connected or not self.running:
-                break
-            time.sleep(0.1)  # Wait for reconnection
-        if not self.running:
-            raise InterfaceError("Interface is shutting down")
-        print("Client reconnected!")
 
     def _start_receiver_thread(self):
         """Start the receiver thread for reading messages from the client socket."""
@@ -309,7 +246,7 @@ class TcpInterface(Interface):
 
         # Check if we need to wait for reconnection before processing any frames
         if not self.connected:
-            self._wait_for_reconnection()
+            raise InterfaceError("Client connection lost")
 
         # Expand messages before sending.
         frames = [(address, _normalize_and_expand_frame(frame)) for (address, frame) in outbound_frames]
@@ -343,32 +280,11 @@ class TcpInterface(Interface):
                 except socket.timeout:
                     responses.append(ReceiveTimeout())
                 except (socket.error, ConnectionError) as e:
-                    # Handle connection loss gracefully - mark as disconnected and wait for reconnection
+                    # Handle connection loss gracefully
                     self._handle_connection_loss()
-                    # Wait for reconnection and then retry the command
-                    try:
-                        self._wait_for_reconnection()
-                        # Retry the command after reconnection
-                        resp_code, data = self._send_command(self.CMD_TRANSACT, message, timeout)
-                        if resp_code == self.RESP_OK:
-                            responses.append(_decode_frame(data))
-                        else:
-                            responses.append(ReceiveTimeout())  # Use timeout for other errors
-                    except Exception:
-                        # If retry fails, use timeout to keep program running
-                        responses.append(ReceiveTimeout())
+                    responses.append(ReceiveTimeout())
 
         return responses
-
-    def wait_for_connection(self, timeout=None):
-        """Wait for a client to connect."""
-        start_time = time.time()
-        while True:
-            if self.connected:
-                break
-            if timeout is not None and (time.time() - start_time) > timeout:
-                raise TimeoutError("Timeout waiting for client connection")
-            time.sleep(0.1)
 
     def is_connected(self):
         """Check if a client is currently connected."""
@@ -378,9 +294,7 @@ class TcpInterface(Interface):
         """Get detailed connection status."""
         return {
             'connected': self.connected,
-            'running': self.running,
-            'host': self.host,
-            'port': self.port
+            'client_address': self.client_address
         }
 
 
@@ -403,12 +317,10 @@ def _decode_frame(message):
 
 
 @contextmanager
-def open_tcp_interface(spec=None):
-    """Returns a 3270 coax TCP server interface."""
-    host, port = split_host_port(spec) if spec else ("0.0.0.0", None)
-    interface = TcpInterface(host, port)
+def open_tcp_interface(client_socket):
+    """Returns a 3270 coax TCP client interface for a specific connection."""
+    interface = TcpInterface(client_socket)
     try:
-        interface.start_server()
         yield interface
     finally:
         interface.close()
