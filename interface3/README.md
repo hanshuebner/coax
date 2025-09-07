@@ -15,15 +15,11 @@ Interface3 enables communication with IBM 3270 terminals by:
    connection to 3270 terminals.
 2. **Protocol Implementation**: The Manchester-encoded coax protocol
    is implemented using PIO blocks of the RP2040 microcontroller.
-3. **TCP Server**: A TCP server is provided that allows the exchange
+3. **TCP Server**: A TCP client is provided that allows the exchange
    of 3270 protocol frames through WiFi using a custom binary
    protocol.  The [oec](https://github.com/hanshuebner/oec) terminal
-   controller can connect to this server to bridge between a 3270
+   controller can act as the server to bridge between a 3270
    terminal and a tn3270 host.
-4. **HTTP Server**: To ease testing and experimentation, a HTTP server
-   is also provided which is functionally equivalent to the TCP
-   server.  It is less efficient than the TCP server and should only
-   be used for experimentation.
 
 ## How It Works
 
@@ -107,13 +103,19 @@ operate only on full frames.
 
    This interactive script will:
    - Prompt for WiFi network name and password
+   - Prompt for the hostname of the oec server
    - Create a `config.json` file on the device
    - Reset the device to apply the configuration
+   
+   For testing, you can use my oec server running at netzhansa.com.
+   It is located in Germany, however, so the latency may be quite
+   high.  If you run oec on a port other than 3174, you can enter it
+   after the hostname, colon separated (host:port).
   
-   Again, you'll be looking at the diagnostic output of the firmware at the
-   end of this process.  When it connects to the WiFi network successfully, it
-   will print the IP address assigned to it by the DHCP server.  Take a note
-   of this address as you'll need it to connect oec to the adapter.
+   Again, you'll be looking at the diagnostic output of the firmware
+   at the end of this process.  When it connects to the WiFi network
+   successfully, it will print the IP address assigned to it by the
+   DHCP server.  It will then connect to the configured server.
 
 ### Configuration
 
@@ -123,7 +125,8 @@ The device stores configuration in a `config.json` file with the following struc
   "wifi": {
     "ssid": "your_network_name",
     "password": "your_network_password"
-  }
+  },
+  "connect_to": "your-oec-server.example.com"
 }
 ```
 
@@ -145,29 +148,6 @@ written by Andrew Kay. oec can be found at
 ## TCP Protocol
 
 The TCP based protocol is described in a [separate file](./TCP_PROTOCOL.md).
-
-## HTTP API Endpoints
-
-### Communication Flow for HTTP
-1. oec sends HTTP POST requests to `/transact` with coax data in the request body
-2. Interface3 receives the data and transmits it over the coax interface
-3. The 3270 terminal responds with data
-4. Interface3 receives the response and returns it to oec via HTTP response
-
-### POST /transact
-Main endpoint for coax transactions:
-- **Request Body**: Binary coax data to transmit
-- **Headers**:
-  - `x-3270-timeout`: Timeout in milliseconds (optional, default: 1000ms)
-- **Response**: Binary coax response data
-- **Status Codes**:
-  - `200 OK`: Successful transaction
-  - `408 Request Timeout`: No response received within timeout
-  - `400 Bad Request`: Invalid request format
-
-### POST /demo
-Test endpoint that executes a demo transaction:
-- **Response**: Plain text confirmation message
 
 ## License
 
