@@ -250,15 +250,10 @@ class TcpInterface(Interface):
         # Wait for response from the message queue
         try:
             import time
-            queue_start = time.perf_counter()
             if timeout is not None:
                 resp_code, response_data = self.response_queue.get(timeout=timeout)
             else:
                 resp_code, response_data = self.response_queue.get()
-            queue_time = time.perf_counter()
-            queue_duration = (queue_time - queue_start) * 1000
-            if queue_duration > 1.0:  # Log if queue wait takes more than 1ms
-                print(f"TCP queue wait took {queue_duration:.2f}ms")
             return resp_code, response_data
         except queue.Empty:
             raise ReceiveTimeout("Timeout waiting for response")
