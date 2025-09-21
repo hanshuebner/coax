@@ -13,6 +13,8 @@ MAX_FRAME_SIZE = 4300  # ~4KB limit
 STATIC_CMD_BUFFER = bytearray(MAX_FRAME_SIZE)
 STATIC_RECV_BUFFER = bytearray(MAX_FRAME_SIZE)
 
+MAX_LOST_POLLS = 5
+
 # Command codes
 CMD_TRANSACT = 0x01
 CMD_PING = 0x02
@@ -185,16 +187,21 @@ async def connect_to_server():
             await asyncio.sleep_ms(1000)
 
 async def poll_keyboard(writer):
+    lost_polls=0
     while True:
         try:
             response = coax.transact(POLL_COMMAND_DATA)
             if response != EMPTY_RESPONSE_DATA:
-                ack_response = coax.transact(POLL_ACK_COMMAND_DATA)
+                ack_response = coax.transact(POLL_ACK_COMMAND_DATA,timeout=100)
                 if ack_response != EMPTY_RESPONSE_DATA:
                     print('unexpected response to poll ack', ack_response)
                 await send_response(writer, RESP_POLL, response)
         except coax.Timeout:
-            print("Timeout waiting for terminal response on coax interface")
+            lost_polls += 1
+            print(f"Timeout waiting for terminal response on coax interface ({lost_polls} lost polls)")
+            if lost_polls > MAX_LOST_POLLS:
+                print("Too many lost polls, resetting coax interface")
+                raise
         await asyncio.sleep_ms(3)
 
 def serve():
