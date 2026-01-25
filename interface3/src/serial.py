@@ -172,8 +172,8 @@ def cmd_transmit_receive(buf):
 
     dprint("repeat_info={} timeout_ms={} coax_words={}".format(repeat_info, timeout_ms, coax_words.hex(' ')))
 
-    # Use timeout from message, with minimum of 100ms (1ms from pycoax is too short)
-    timeout = max(timeout_ms, 100)
+    # Use timeout from message, with minimum of 200ms (1ms from pycoax is too short)
+    timeout = max(timeout_ms, 200)
 
     try:
         rx_data = coax.transact(coax_words, timeout=timeout)

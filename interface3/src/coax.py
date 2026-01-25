@@ -255,11 +255,6 @@ def setup_rx_dma(buf):
     :param buf: bytearray of words to receive
     """
 
-    # Drain any stale data from the RX FIFO before starting
-    recv.restart()
-    while recv.rx_fifo() > 0:
-        recv.get()
-
     rx_dma.config(
         read=recv,
         write=uctypes.addressof(buf),
@@ -270,6 +265,7 @@ def setup_rx_dma(buf):
             treq_sel=RX_TREQ_SEL),
         trigger=True)
 
+    recv.restart()
     recv.active(1)
 
 
