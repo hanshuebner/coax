@@ -3,7 +3,11 @@ import micropython
 import struct
 import coax
 import uselect
-from debug import dprint
+import machine
+from machine import Timer, WDT
+from leds import leds
+from time import sleep
+from debug import dprint, debug
 
 HARDWARE_TYPE = "interface3"
 FIRMWARE_VERSION = "v0.0"
@@ -65,8 +69,6 @@ def unpack_message(buf: bytes):
 def read_byte():
     """Read a single byte from stdin"""
     byte = sys.stdin.buffer.read(1)
-    if len(byte) == 0:
-        return None
     return byte[0]
 
 def write_byte(b):
@@ -80,8 +82,6 @@ def read_slip_frame():
 
     while True:
         byte = read_byte()
-        if byte is None:
-            return None
 
         if byte == END:
             if len(frame) > 0:
@@ -162,8 +162,21 @@ def cmd_info(buf):
         return error_response(ERROR_INVALID_MESSAGE, "unknown query type")
 
 def cmd_transmit_receive(buf):
+    # Parse message format:
+    # repeat_info (2 bytes BE) + words (N*2 bytes LE) + response_length (2 bytes BE) + timeout_ms (2 bytes BE)
+    repeat_info = struct.unpack('>H', buf[0:2])[0]
+    timeout_ms = struct.unpack('>H', buf[-2:])[0]
+
+    # Extract coax words (everything between repeat_info and response_length/timeout)
+    coax_words = buf[2:-4]
+
+    dprint("repeat_info={} timeout_ms={} coax_words={}".format(repeat_info, timeout_ms, coax_words.hex(' ')))
+
+    # Use timeout from message, with minimum of 100ms (1ms from pycoax is too short)
+    timeout = max(timeout_ms, 100)
+
     try:
-        rx_data = coax.transact(buf)
+        rx_data = coax.transact(coax_words, timeout=timeout)
     except coax.Timeout:
         return error_response(102, "")  # ReceiveTimeout
 
@@ -171,14 +184,27 @@ def cmd_transmit_receive(buf):
     payload_len = 1 + len(rx_data)  # 1 for RESPONSE_OK
     return struct.pack('>HB', payload_len, RESPONSE_OK) + rx_data + b'\x00\x00'
 
+timer_period = 200
+status_timer = Timer()
+
+def status_led_off(_):
+    leds['STS'].off()
+    status_timer.init(period=timer_period, mode=Timer.ONE_SHOT, callback=status_led_on)
+
+def status_led_on(_):
+    leds['STS'].on()
+    status_timer.init(period=100, mode=Timer.ONE_SHOT, callback=status_led_off)
+
 def serve():
+    global timer_period
     micropython.kbd_intr(-1)
     sync()
+    leds['STS'].off()
+    wdt = None
+    status_led_on(None)
 
     while True:
         frame = read_slip_frame()
-        if frame is None:
-            break
 
         dprint("Data: {}".format(frame.hex(' ')))
 
@@ -186,6 +212,8 @@ def serve():
 
         if command == COMMAND_RESET:
             dprint("COMMAND_RESET")
+            timer_period = 900
+            wdt = WDT(timeout = 5000)
             response = cmd_reset(buf)
         elif command == COMMAND_INFO:
             dprint("COMMAND_INFO")
@@ -200,12 +228,28 @@ def serve():
         dprint("Response: {}".format(response.hex(' ')))
         write_slip_frame(response)
 
+        if wdt != None:
+            wdt.feed()
+
 def main():
+    # give the operator some time to press ctrl-c
+    for _ in range(10):
+        leds['STS'].on()
+        sleep(0.25)
+        leds['STS'].off()
+        sleep(0.25)
+
     dprint('Starting serial protocol')
     try:
         serve()
     except Exception as e:
+        micropython.kbd_intr(3)                             # reset keyboard interrupt to ctrl-c
         import traceback
+        debug = True
         dprint("EXCEPTION:", repr(e))
         dprint(traceback.format_exc())
-        main()
+        while True:
+            leds['ERR'].on()
+            sleep(0.25)
+            leds['ERR'].off()
+            sleep(0.25)
