@@ -9,7 +9,7 @@ import config
 
 # Protocol constants
 TCP_PORT = 3278
-MAX_FRAME_SIZE = 4300  # ~4KB limit
+MAX_FRAME_SIZE = 8300  # ~4KB limit
 STATIC_CMD_BUFFER = bytearray(MAX_FRAME_SIZE)
 STATIC_RECV_BUFFER = bytearray(MAX_FRAME_SIZE)
 

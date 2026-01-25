@@ -1,6 +1,9 @@
 import sys
 import micropython
 import struct
+import coax
+import uselect
+from debug import dprint
 
 HARDWARE_TYPE = "interface3"
 FIRMWARE_VERSION = "v0.0"
@@ -45,10 +48,19 @@ ERROR_INVALID_MESSAGE = 1
 ERROR_UNKNOWN_COMMAND = 2
 ERROR_MESSAGE_TIMEOUT = 3
 
+poll = uselect.poll()
+poll.register(sys.stdin, uselect.POLLIN)
+
+def sync():
+    dprint("synchronizing")
+    while poll.poll(0):
+        b = sys.stdin.buffer.read(1)
+        dprint("discard {}".format(b.hex(' ')))
+    dprint("done synchronizing")
 
 def unpack_message(buf: bytes):
     length, command = struct.unpack_from('>HB', buf, 0)
-    return length, command, buf[3:]
+    return length, command, buf[3:-2]  # exclude 2-byte footer
 
 def read_byte():
     """Read a single byte from stdin"""
@@ -109,8 +121,8 @@ def write_slip_frame(data):
 
 def error_response(code, message):
     encoded_message = message.encode()
-
-    return struct.pack('>HBB', len(encoded_message), RESPONSE_ERROR, code) + encoded_message
+    payload_len = 2 + len(encoded_message)  # 2 for RESPONSE_ERROR + error code
+    return struct.pack('>HBB', payload_len, RESPONSE_ERROR, code) + encoded_message + b'\x00\x00'
 
 def cmd_reset(buf):
     return b'\x00\x03\x01\x32\x70\x00\x00'
@@ -124,57 +136,76 @@ def cmd_info(buf):
                            INFO_HARDWARE_TYPE,
                            INFO_FIRMWARE_VERSION,
                            INFO_MESSAGE_BUFFER_SIZE,
-                           INFO_FEATURES)
-                           
+                           INFO_FEATURES) + b'\x00\x00'
+
     elif query == INFO_HARDWARE_TYPE:
         encoded_message = HARDWARE_TYPE.encode()
-
-        return struct.pack('>HB', len(encoded_message),
-                           RESPONSE_OK) + encoded_message
+        payload_len = 1 + len(encoded_message)  # 1 for RESPONSE_OK
+        return struct.pack('>HB', payload_len,
+                           RESPONSE_OK) + encoded_message + b'\x00\x00'
 
     elif query == INFO_FIRMWARE_VERSION:
         encoded_message = FIRMWARE_VERSION.encode()
-
-        return struct.pack('>HB', len(encoded_message),
-                           RESPONSE_OK) + encoded_message
+        payload_len = 1 + len(encoded_message)  # 1 for RESPONSE_OK
+        return struct.pack('>HB', payload_len,
+                           RESPONSE_OK) + encoded_message + b'\x00\x00'
 
     elif query == INFO_MESSAGE_BUFFER_SIZE:
-        return struct.pack('>HB>L', 4,
+        return struct.pack('>HBI', 5,
                            RESPONSE_OK,
-                           MAX_FRAME_SIZE)
+                           MAX_FRAME_SIZE) + b'\x00\x00'
 
     elif query == INFO_FEATURES:
-        return struct.pack('>HB', 0, RESPONSE_OK)
+        return struct.pack('>HB', 1, RESPONSE_OK) + b'\x00\x00'
 
     else:
         return error_response(ERROR_INVALID_MESSAGE, "unknown query type")
 
 def cmd_transmit_receive(buf):
-    return coax.transact(buf)
+    try:
+        rx_data = coax.transact(buf)
+    except coax.Timeout:
+        return error_response(102, "")  # ReceiveTimeout
 
-def main():
-    sys.stderr.write("SLIP server starting\n")
+    # Format: length (2 bytes) + RESPONSE_OK (1 byte) + coax data + footer (2 bytes)
+    payload_len = 1 + len(rx_data)  # 1 for RESPONSE_OK
+    return struct.pack('>HB', payload_len, RESPONSE_OK) + rx_data + b'\x00\x00'
 
+def serve():
     micropython.kbd_intr(-1)
+    sync()
 
     while True:
         frame = read_slip_frame()
         if frame is None:
             break
 
+        dprint("Data: {}".format(frame.hex(' ')))
+
         length, command, buf = unpack_message(frame)
 
         if command == COMMAND_RESET:
+            dprint("COMMAND_RESET")
             response = cmd_reset(buf)
         elif command == COMMAND_INFO:
+            dprint("COMMAND_INFO")
             response = cmd_info(buf)
         elif command == COMMAND_TRANSMIT_RECEIVE:
+            dprint("COMMAND_TRANSMIT_RECEIVE")
             response = cmd_transmit_receive(buf)
         else:
+            dprint("COMMAND_TRANSMIT_RECEIVE")
             response = error_response(ERROR_UNKNOWN_COMMAND, "command not (yet) implemented")
 
-        #sys.stderr.write("Data: {}\n".format(repr(frame)))
+        dprint("Response: {}".format(response.hex(' ')))
         write_slip_frame(response)
 
-if __name__ == "__main__":
-    main()
+def main():
+    dprint('Starting serial protocol')
+    try:
+        serve()
+    except Exception as e:
+        import traceback
+        dprint("EXCEPTION:", repr(e))
+        dprint(traceback.format_exc())
+        main()
