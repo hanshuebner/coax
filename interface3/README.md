@@ -1,4 +1,4 @@
-# Interface3 - Raspberry Pi Pico W based 3270 Terminal Adapter with WiFi
+# Interface3 - Raspberry Pi Pico W based 3270 Terminal Adapter
 
 Interface3 is an alternative hardware solution to connect a 3270 coax
 terminal to host systems through the oec terminal controller software
@@ -15,11 +15,13 @@ Interface3 enables communication with IBM 3270 terminals by:
    connection to 3270 terminals.
 2. **Protocol Implementation**: The Manchester-encoded coax protocol
    is implemented using PIO blocks of the RP2040 microcontroller.
-3. **TCP Server**: A TCP client is provided that allows the exchange
-   of 3270 protocol frames through WiFi using a custom binary
-   protocol.  The [oec](https://github.com/hanshuebner/oec) terminal
-   controller can act as the server to bridge between a 3270
-   terminal and a tn3270 host.
+3. **Connection Modes**: Two connection modes are supported:
+   - **Serial Mode**: Direct USB serial connection to a host running
+     oec/pycoax, compatible with interface2.  Requires Andrew Kay's
+     original [oec](https://github.com/lowobservable/oec).
+   - **WiFi Mode**: TCP client that connects to an oec server over
+     WiFi using a custom binary protocol.  Requires the modified
+     [oec-tcp](https://github.com/hanshuebner/oec-tcp).
 
 ## How It Works
 
@@ -29,12 +31,12 @@ The interface uses a Raspberry Pi Pico with custom PCB that provides:
 - Two additional serial interfaces with TTL levels on a pin header
 - LED indicators to display the operating state of the interface
 - Momentary button that resets the Raspberry Pi Pico
-- USB B socket for power supply and an optional serial connection
+- USB B socket for power supply and serial connection
 
 ### Software Layer
 
-The interface3 software provides implements the line level manchester
-encoded protocol in a
+The interface3 software implements the line level Manchester-encoded
+protocol in a
 [PIO](https://www.raspberrypi.com/news/what-is-pio/) block.  This
 offloads the handling of the real-time protocol requirements from the
 main ARM CPU and allows the rest of the interface software to be
@@ -54,16 +56,16 @@ operate only on full frames.
 
 3. **Development Tools**:
    - `mpremote` for communicating with the Pico
-   - `jq` for JSON processing (used by config-wifi.sh)
+   - `jq` for JSON processing (used by config-wifi.sh, WiFi mode only)
 
-### Installation Steps
+### Common Installation Steps
 
 1. **Flash MicroPython Firmware**:
 
    A prebuilt MicroPython image for the Raspberry Pi Pico W (RP2040
    version) can be downloaded from
    [my web site](https://vaxbusters.org/micropython-v1.26.0-rpi-pico-w.uf2).
-   Connect the Rasperry Pi Pico W to your workstation using its Micro USB
+   Connect the Raspberry Pi Pico W to your workstation using its Micro USB
    port while holding the small white "BOOTSEL" button, then copy the
    image to the USB drive that automatically appears (mounted as
    `/Volumes/RPI-RP2/` on Macs).
@@ -80,46 +82,41 @@ operate only on full frames.
    pip install mpremote
    ```
 
-3. **Upload MicroPython Firmware to Pico**:
+3. **Upload and install the firmware** using the install script:
+
    ```bash
-   # Use the provided upload script
-   ./upload-and-run.sh
+   ./install.sh serial   # For serial mode
+   ./install.sh wifi     # For WiFi mode
    ```
 
-   This script will:
-   - Reset the device
-   - Copy all Python files from `src/` to the Pico
-   - Start the main application
-  
-   You will see the output of the MicroPython firmware.  It may try to connect
-   to a previously configured WiFi network.  You can interrupt the Firmware
-   using Ctrl-C to get to the Python repl or exit the connection using Ctrl-X.
+   The install script will upload all required files and configure
+   the device for the selected mode.
 
-5. **Configure WiFi**:
-   ```bash
-   # Use the provided WiFi configuration script
-   ./config-wifi.sh
-   ```
+### Serial Mode Setup
 
-   This interactive script will:
-   - Prompt for WiFi network name and password
-   - Prompt for the hostname of the oec server
-   - Create a `config.json` file on the device
-   - Reset the device to apply the configuration
-   
-   For testing, you can use my oec server running at netzhansa.com.
-   It is located in Germany, however, so the latency may be quite
-   high.  If you run oec on a port other than 3174, you can enter it
-   after the hostname, colon separated (host:port).
-  
-   Again, you'll be looking at the diagnostic output of the firmware
-   at the end of this process.  When it connects to the WiFi network
-   successfully, it will print the IP address assigned to it by the
-   DHCP server.  It will then connect to the configured server.
+After running `./install.sh serial`, the device is ready to use.
+Connect to the interface using oec (see Usage section below).
 
-### Configuration
+### WiFi Mode Setup
 
-The device stores configuration in a `config.json` file with the following structure:
+After running `./install.sh wifi`, configure WiFi credentials:
+
+```bash
+./config-wifi.sh
+```
+
+This interactive script will:
+- Prompt for WiFi network name and password
+- Prompt for the hostname of the oec server
+- Create a `config.json` file on the device
+- Reset the device to apply the configuration
+
+For testing, you can use my oec server running at netzhansa.com.
+It is located in Germany, however, so the latency may be quite
+high.  If you run oec on a port other than 3174, you can enter it
+after the hostname, colon separated (host:port).
+
+The device stores configuration in a `config.json` file:
 ```json
 {
   "wifi": {
@@ -130,24 +127,99 @@ The device stores configuration in a `config.json` file with the following struc
 }
 ```
 
+## Usage
+
+### Serial Mode
+
+Serial mode requires Andrew Kay's original oec repository:
+https://github.com/lowobservable/oec
+
+Run oec with the serial port:
+
+```bash
+python -m oec /dev/tty.usbmodem* tn3270 your-host.example.com:23
+```
+
+Replace `/dev/tty.usbmodem*` with the actual device path (e.g.,
+`/dev/tty.usbmodem1124101` on macOS, `/dev/ttyACM0` on Linux, or
+`COM3` on Windows).
+
+#### Accessing the Python REPL
+
+During startup, the firmware provides a 5-second window to access the
+MicroPython REPL for debugging or configuration.  To access the REPL:
+
+1. **Connect to the USB serial port** before or immediately after
+   resetting the device.  Use a terminal program or mpremote:
+   ```bash
+   mpremote connect /dev/tty.usbmodem* repl
+   ```
+
+2. **Watch for the startup blink pattern** - the STS LED blinks slowly
+   (250ms on, 250ms off) during this 5-second window.
+
+3. **Press Ctrl-C** during this window to interrupt startup and enter
+   the REPL.
+
+**Important**: You must connect to the serial port *before* the
+startup window expires.  Once the firmware enters protocol mode, the
+serial port is used exclusively for SLIP-encoded communication and
+keyboard interrupt is disabled.
+
+### WiFi Mode
+
+WiFi mode requires a modified version of oec that acts as a TCP server:
+https://github.com/hanshuebner/oec-tcp
+
+Start the oec-tcp server:
+
+```bash
+python -m oec --server :3174 tn3270 your-host.example.com:23
+```
+
+This starts oec listening on port 3174 for incoming connections from
+interface3 devices.  When the interface connects to WiFi successfully,
+it will automatically connect to the configured server.
+
+See the [TCP Protocol documentation](./TCP_PROTOCOL.md) for details on
+the network protocol.
+
 ## LED Indicators
 
 The interface provides several LED indicators:
-- **NET**: Network activity (blinks during HTTP requests)
-- **STS**: Status indicator (blinks at 1Hz when running)
-- **ERR**: Error indicator (lights when transactions timeout)
+- **NET**: Network activity (WiFi mode only)
+- **STS**: Status indicator
+- **ERR**: Error indicator
 - **TX1-4/RX1-4**: Individual channel transmit/receive indicators
 - **PICO**: Raspberry Pi Pico onboard LED
 
-## Integration with oec
+### Serial Mode LED Patterns
 
-Interface3 is designed to work with oec (3174 emulation software)
-written by Andrew Kay. oec can be found at
-[github.com/hanshuebner/oec](https://github.com/hanshuebner/oec).
+| LED | Pattern | Description |
+|-----|---------|-------------|
+| STS | Slow blink (250ms on/off) | **Startup window** - Press Ctrl-C to access REPL |
+| STS | Fast blink (100ms on, 200ms off) | **Waiting for connection** - Ready for host to connect |
+| STS | Once per second (100ms on, 900ms off) | **Connected** - Normal operation |
+| ERR | Continuous fast blink (250ms on/off) | **Fatal error** - Unhandled exception occurred |
 
-## TCP Protocol
+### WiFi Mode LED Patterns
 
-The TCP based protocol is described in a [separate file](./TCP_PROTOCOL.md).
+| LED | Pattern | Description |
+|-----|---------|-------------|
+| NET | Fast blink (8Hz) | **Connecting to WiFi** - Attempting to join network |
+| NET | Brief on, then off | **WiFi connected** - Successfully joined network |
+| NET | On during activity | **Network activity** - Processing commands from server |
+| STS | Solid on | **Connecting to server** - Attempting TCP connection |
+| STS | Blink (1s on, 1s off) | **Reconnecting** - Connection lost, retrying |
+| ERR | Solid on | **WiFi failed** - Could not connect to WiFi network |
+| ERR | Solid on | **Coax timeout** - Terminal not responding (clears on success) |
+
+## Quick Reference
+
+| Mode | oec Repository | Command |
+|------|----------------|---------|
+| Serial | [lowobservable/oec](https://github.com/lowobservable/oec) | `python -m oec /dev/ttyUSB0 tn3270 host:port` |
+| WiFi | [hanshuebner/oec-tcp](https://github.com/hanshuebner/oec-tcp) | `python -m oec --server :3174 tn3270 host:port` |
 
 ## License
 
@@ -164,5 +236,3 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
-
