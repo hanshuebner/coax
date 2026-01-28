@@ -3,12 +3,14 @@
 Confidence test for interface3 serial protocol.
 
 Connects to the adapter and sends RESET and INFO commands,
-displaying the decoded responses.
+displaying the decoded responses. Then continuously polls
+the terminal keyboard.
 """
 
 import sys
 import struct
 import argparse
+import time
 from serial import Serial
 from sliplib import SlipWrapper
 
@@ -20,6 +22,7 @@ ESC_ESC = 0xDD
 
 # Command codes
 COMMAND_RESET = 0x01
+COMMAND_TRANSMIT_RECEIVE = 0x06
 COMMAND_INFO = 0xF0
 
 # INFO subcommands
@@ -44,6 +47,25 @@ INFO_NAMES = {
     INFO_MESSAGE_BUFFER_SIZE: "Message Buffer Size",
     INFO_FEATURES: "Features",
 }
+
+# Coax protocol constants
+COAX_COMMAND_POLL = 0x01
+COAX_COMMAND_POLL_ACK = 0x11
+
+
+def pack_command_word(command):
+    """Pack a coax command into a 10-bit command word."""
+    return (command << 2) | 0x1
+
+
+def is_keystroke_response(value):
+    """Check if the response word is a keystroke response."""
+    return ((value & 0x2) == 0x2) and ((value & 0x1) == 0)
+
+
+def is_tt_ar(words):
+    """Check if response is TT/AR (no response from terminal)."""
+    return len(words) == 1 and words[0] == 0
 
 
 class SlipSerial(SlipWrapper):
@@ -126,6 +148,59 @@ def decode_info_response(query, response):
         return True, f"Raw: {payload.hex()}"
 
 
+def transmit_receive(slip_serial, command_word, response_length=1, timeout_ms=100):
+    """Send a coax command via TRANSMIT_RECEIVE and return response words."""
+    # Build message: command + repeat_info + words + response_length + timeout
+    message = bytes([COMMAND_TRANSMIT_RECEIVE])
+    message += struct.pack('>H', 0)  # repeat_info: no repeat
+    message += struct.pack('<H', command_word)  # word in little-endian
+    message += struct.pack('>H', response_length)
+    message += struct.pack('>H', timeout_ms)
+
+    write_message(slip_serial, message)
+    response = read_message(slip_serial)
+
+    if response[0] != RESPONSE_OK:
+        error_code = response[1] if len(response) > 1 else 0
+        return None, error_code
+
+    # Unpack response words (little-endian pairs)
+    words = []
+    payload = response[1:]
+    for i in range(0, len(payload), 2):
+        if i + 1 < len(payload):
+            word = payload[i] | (payload[i + 1] << 8)
+            words.append(word)
+    return words, None
+
+
+def poll_keyboard(slip_serial, timeout_ms=100):
+    """Poll the terminal keyboard. Returns (scan_code, error) tuple."""
+    command_word = pack_command_word(COAX_COMMAND_POLL)
+    words, error = transmit_receive(slip_serial, command_word, response_length=1, timeout_ms=timeout_ms)
+
+    if error is not None:
+        return None, error
+
+    if words is None or len(words) == 0:
+        return None, "No response"
+
+    if is_tt_ar(words):
+        return None, None  # No key pressed
+
+    if is_keystroke_response(words[0]):
+        scan_code = (words[0] >> 2) & 0xff
+        return scan_code, None
+
+    return None, f"Unknown response: 0x{words[0]:04x}"
+
+
+def send_poll_ack(slip_serial, timeout_ms=100):
+    """Send POLL_ACK to acknowledge a keystroke."""
+    command_word = pack_command_word(COAX_COMMAND_POLL_ACK)
+    transmit_receive(slip_serial, command_word, response_length=1, timeout_ms=timeout_ms)
+
+
 def run_confidence_test(port, timeout=5):
     """Run the confidence test on the specified serial port."""
     print(f"Opening serial port {port} at 115200 baud...")
@@ -181,6 +256,25 @@ def run_confidence_test(port, timeout=5):
             print(f"    Result: {decoded}")
 
         print("\n--- Confidence Test Complete ---")
+
+        # Keyboard polling loop
+        print("\n--- Keyboard Polling (press Ctrl+C to exit) ---")
+        print("Polling terminal keyboard at 100ms intervals...")
+
+        while True:
+            scan_code, error = poll_keyboard(slip_serial, timeout_ms=100)
+
+            if error is not None:
+                if error == 102:  # ReceiveTimeout - normal when no key pressed
+                    pass
+                else:
+                    print(f"\rPoll error: {error}                    ", end="", flush=True)
+            elif scan_code is not None:
+                print(f"\nKey pressed! Scan code: 0x{scan_code:02X} ({scan_code})")
+                send_poll_ack(slip_serial, timeout_ms=100)
+
+            time.sleep(0.1)
+
         return True
 
 
@@ -193,6 +287,9 @@ def main():
     try:
         success = run_confidence_test(args.port, args.timeout)
         sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n\nKeyboard polling stopped.")
+        sys.exit(0)
     except TimeoutError as e:
         print(f"\nTimeout: {e}", file=sys.stderr)
         sys.exit(1)
