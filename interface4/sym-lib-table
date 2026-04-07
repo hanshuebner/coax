@@ -1,0 +1,8 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "MCU_RaspberryPi_RP2350")(type "KiCad")(uri "${KIPRJMOD}/MCU_RaspberryPi_RP2350.kicad_sym")(options "")(descr ""))
+  (lib (name "RPi HAT")(type "KiCad")(uri "${KIPRJMOD}/RPi_Hat_Template/libraries/RPi_Hat.kicad_sym")(options "")(descr ""))
+  (lib (name "RP2350")(type "KiCad")(uri "${KIPRJMOD}/MCU_RaspberryPi_RP2350.kicad_sym")(options "")(descr ""))
+  (lib (name "STUSB4500")(type "KiCad")(uri "${KIPRJMOD}/STUSB4500QTR/STUSB4500QTR.kicad_sym")(options "")(descr ""))
+  (lib (name "TPS259474")(type "KiCad")(uri "${KIPRJMOD}/TPS259474ARPWR/TPS259474ARPWR.kicad_sym")(options "")(descr ""))
+)

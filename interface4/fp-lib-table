@@ -1,0 +1,8 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "interface4")(type "KiCad")(uri "${KIPRJMOD}/interface4.pretty")(options "")(descr ""))
+  (lib (name "RPi HAT")(type "KiCad")(uri "${KIPRJMOD}/RPi_Hat_Template/footprints/RPI_Hat.pretty")(options "")(descr ""))
+  (lib (name "library")(type "KiCad")(uri "${KIPRJMOD}/library.pretty")(options "")(descr ""))
+  (lib (name "STUSB4500QTR")(type "KiCad")(uri "${KIPRJMOD}/STUSB4500QTR")(options "")(descr ""))
+  (lib (name "TPS259474")(type "KiCad")(uri "${KIPRJMOD}/TPS259474ARPWR")(options "")(descr ""))
+)
