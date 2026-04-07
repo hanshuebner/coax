@@ -1,0 +1,119 @@
+; Coax Manchester encoding/decoding PIO programs
+; Translated from interface3/src/coax.py
+
+; xmit_serial: Manchester encoder for coax transmission
+;
+; First word in FIFO defines frame length - 1 (i.e. 0 for 1 word).
+; Every word to be transmitted is put in FIFO in Manchester encoding,
+; including both the sync and the parity bit, for a total of 24 bits
+; per word. The data must be padded with 8 zero bits to the right.
+;
+; Pin mapping:
+;   out_base = TX pin (1 pin)
+;   set_base = TX pin (2 pins: TX and TX_ACTIVE)
+;   sideset  = none
+
+.program xmit_serial
+    pull
+    mov y, osr
+    pull
+    ; generate 5 sync bits
+    set x, 4
+sync:
+    set pins, 0b10   [5]
+    set pins, 0b11   [4]
+    jmp x--, sync
+    ; generate start pulse pattern (1/2 bit zero already into it)
+    set x, 23        [11]    ; initialize bit counter for first word
+    set pins, 0b10   [13]
+    ; transmit word
+bit_loop_delay:
+    nop              [3]
+bit_loop_nodelay:
+    out pins, 1
+    jmp x--, bit_loop_delay
+    jmp !y, end_of_frame
+    pull
+    set x, 23                ; set bit counter for this word
+    jmp y--, bit_loop_nodelay
+end_of_frame:
+    nop              [2]
+    set pins, 0b10   [5]
+    set pins, 0b11   [5]
+    set pins, 0b10   [23]
+    set pins, 0b00
+
+
+; xmit_serial_delay: Generates delayed TX signal for analog signal conditioning
+;
+; Pin mapping:
+;   in_base  = TX pin (watches TX via pin 0)
+;   set_base = TX_DELAY pin (1 pin)
+
+.program xmit_serial_delay
+    wait 1 pin 0
+    set pins, 0
+    wait 0 pin 0
+    set pins, 1
+
+
+; recv_serial: Manchester decoder for coax reception
+;
+; Receives and decodes frames. Each frame is terminated by a 0xffffffff
+; word in the FIFO. The FIFO will usually be read in half-word (16 bit)
+; mode by DMA.
+;
+; Pin mapping:
+;   in_base  = RX pin (also reads pin+2 = TX_ACTIVE for tx-done detection)
+;   jmp_pin  = RX pin
+;   set_base = debug pins (2 pins, optional)
+
+.program recv_serial
+    ; wait for end of transmission
+    wait 1 pin 2
+    wait 0 pin 2
+start0:
+    wait 1 pin 0              ; wait for quiescent bit
+start1:
+    wait 0 pin 0
+    set pins, 0b01
+    set pins, 0b00
+    jmp pin, start1    [3]    ; expect zero half bit
+    jmp pin, start1    [5]    ; expect zero half bit
+    jmp pin, start1    [5]    ; expect zero half bit
+    jmp pin, vio10     [5]
+    jmp start0
+vio10:
+    jmp pin, vio11     [4]
+    jmp start0
+vio11:
+    jmp pin, vio12
+    jmp start0
+vio12:
+    set pins, 0b11
+    set x, 9                  ; 10 bits to read
+    ; wait for the beginning of the sync bit
+    wait 0 pin 0
+    ; we are 1/4 bit into the sync/end bit
+word_loop:
+    jmp pin, end_frame
+    ; sync on the rising edge of the sync bit
+    wait 1 pin 0       [12]
+    ; we are 3/4 bits into the first data bit
+bit_loop:
+    in pins, 1                ; read bit, wait for next
+    set pins, 0b10
+    set pins, 0b11     [8]
+    jmp x--, bit_loop
+    ; looking at the parity bit now
+    mov x, pins        [3]
+    set x, 9                  ; 10 bits to read
+    ; FIXME check parity
+    jmp word_loop              ; looking at 1/4 of sync/end again
+end_frame:
+    set x, 0
+    mov isr, ~x
+    push
+wait_idle:
+    jmp pin, wait_idle
+    set pins, 0b00

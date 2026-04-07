@@ -1,3 +1,6 @@
 [submodule "interface4/RPi_Hat_Template"]
 	path = interface4/RPi_Hat_Template
 	url = https://github.com/devbisme/RPi_Hat_Template
+[submodule "interface3/firmware/pico-sdk"]
+	path = interface3/firmware/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git
