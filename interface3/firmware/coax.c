@@ -240,7 +240,7 @@ static void setup_tx_dma(const uint32_t *buf, int count) {
 int coax_transact(const uint8_t *tx_words, int tx_word_count,
                   uint8_t *rx_buf, int rx_buf_size, int timeout_ms) {
     // Enforce minimum timeout
-    if (timeout_ms < 200) timeout_ms = 200;
+    if (timeout_ms < 5) timeout_ms = 5;
 
     // Encode TX data
     int n_words = tx_word_count / 2;
@@ -258,7 +258,13 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
     setup_rx_dma(rx_dma_buf, rx_halfword_count);
     setup_tx_dma(tx_encoded, tx_count);
 
-    // Wait for end-of-frame marker
+    // Wait for TX DMA to complete before starting the response timeout,
+    // since large frames (e.g. 80x25 screen) take ~20ms to transmit.
+    while (dma_channel_is_busy(tx_dma_chan)) {
+        tight_loop_contents();
+    }
+
+    // Now start the response timeout
     absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
     int receive_count = -1;
 

@@ -23,6 +23,9 @@ void leds_update(void);
 // Trigger TX activity LED for a port (stretched to 100ms minimum)
 void led_tx_activity(int port);
 
+// Update terminal-connected state for a port (affects RX LED)
+void led_set_terminal_connected(int port, bool connected);
+
 // STS LED
 void led_set_sts(bool on);
 

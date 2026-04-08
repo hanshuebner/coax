@@ -21,8 +21,9 @@ static const int all_leds[] = { 8, 7, 13, 22, 1, 0, 28, 6, 26, 27 };
 static absolute_time_t tx_off_time[NUM_PORTS];
 static bool tx_led_on[NUM_PORTS];
 
-// RX (CDC connected) blink state
+// RX LED state: off=no CDC, blink=CDC but no terminal, solid=CDC+terminal
 static bool rx_led_on[NUM_PORTS];
+static bool terminal_connected[NUM_PORTS];
 static absolute_time_t rx_next_toggle[NUM_PORTS];
 
 // STS blink state
@@ -39,6 +40,7 @@ void leds_init(void) {
     for (int i = 0; i < NUM_PORTS; i++) {
         tx_led_on[i] = false;
         rx_led_on[i] = false;
+        terminal_connected[i] = false;
         rx_next_toggle[i] = get_absolute_time();
     }
 
@@ -72,6 +74,11 @@ void led_set_sts(bool on) {
     gpio_put(PIN_LED_STS, on);
 }
 
+void led_set_terminal_connected(int port, bool connected) {
+    if (port < 0 || port >= NUM_PORTS) return;
+    terminal_connected[port] = connected;
+}
+
 void leds_update(void) {
     // TX activity LEDs: turn off after stretch period
     for (int i = 0; i < NUM_PORTS; i++) {
@@ -81,12 +88,30 @@ void leds_update(void) {
         }
     }
 
-    // RX LEDs: solid on when CDC connected, off when not
+    // RX LEDs:
+    //   off: CDC not connected
+    //   blink (1900 on, 100 off): CDC connected, terminal not responding
+    //   solid on: CDC connected and terminal responding
     for (int i = 0; i < NUM_PORTS; i++) {
-        bool connected = tud_cdc_n_connected(i);
-        if (connected != rx_led_on[i]) {
-            rx_led_on[i] = connected;
-            gpio_put(port_leds[i].pin_rx, connected);
+        bool cdc = tud_cdc_n_connected(i);
+        if (!cdc) {
+            if (rx_led_on[i]) {
+                gpio_put(port_leds[i].pin_rx, 0);
+                rx_led_on[i] = false;
+            }
+            rx_next_toggle[i] = get_absolute_time();
+        } else if (terminal_connected[i]) {
+            if (!rx_led_on[i]) {
+                gpio_put(port_leds[i].pin_rx, 1);
+                rx_led_on[i] = true;
+            }
+        } else {
+            // Blink: 1900ms on, 100ms off
+            if (time_reached(rx_next_toggle[i])) {
+                rx_led_on[i] = !rx_led_on[i];
+                gpio_put(port_leds[i].pin_rx, rx_led_on[i]);
+                rx_next_toggle[i] = make_timeout_time_ms(rx_led_on[i] ? 1900 : 100);
+            }
         }
     }
 
