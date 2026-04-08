@@ -119,20 +119,21 @@ static int cmd_transmit_receive(int port, const uint8_t *buf, int buf_len,
     // Switch PIO to this port
     coax_switch_port(port);
 
-    // Flash activity LED
-    led_set(port_pins[port].pin_led, true);
-
     // Perform transaction
     uint8_t rx_data[MAX_FRAME_LENGTH * 2];
     int rx_len = coax_transact(coax_words, coax_words_len, rx_data, sizeof(rx_data), timeout_ms);
-
-    led_set(port_pins[port].pin_led, false);
 
     if (rx_len == COAX_TIMEOUT) {
         return make_error(out, out_size, 102, "");  // ReceiveTimeout
     }
     if (rx_len < 0) {
         return make_error(out, out_size, 105, "transact error");
+    }
+
+    // Flash TX LED on successful transact, skip empty polls (0x0000)
+    bool is_empty_poll = (rx_len == 2 && rx_data[0] == 0 && rx_data[1] == 0);
+    if (!is_empty_poll) {
+        led_tx_activity(port);
     }
 
     // Build response: length(2) + RESPONSE_OK(1) + rx_data + footer(2)

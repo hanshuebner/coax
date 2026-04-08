@@ -11,13 +11,12 @@
 
 #define MAX_FRAME_LENGTH (80 * 25 + 16)
 
-// Per-port pin configuration
+// Per-port pin configuration (coax signal pins only)
 typedef struct {
     uint pin_rx;
     uint pin_tx;
     uint pin_tx_active;
     uint pin_tx_delay;
-    uint pin_led;
 } coax_port_pins_t;
 
 extern const coax_port_pins_t port_pins[NUM_PORTS];

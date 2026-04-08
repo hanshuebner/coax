@@ -58,20 +58,6 @@ static void process_port(int port) {
     }
 }
 
-// Status LED blink state
-static bool sts_led_on = false;
-static absolute_time_t sts_next_toggle;
-static int sts_on_ms = 100;
-static int sts_off_ms = 200;
-
-static void update_status_led(void) {
-    if (!time_reached(sts_next_toggle)) return;
-
-    sts_led_on = !sts_led_on;
-    led_set(PIN_LED_STS, sts_led_on);
-    sts_next_toggle = make_timeout_time_ms(sts_led_on ? sts_on_ms : sts_off_ms);
-}
-
 int main(void) {
     stdio_init_all();
 
@@ -82,15 +68,9 @@ int main(void) {
 
     coax_init();
 
-    // Initialize SLIP state for each port
     for (int i = 0; i < NUM_PORTS; i++) {
         slip_init(&slip_state[i]);
     }
-
-    // Start status LED blinking
-    sts_next_toggle = get_absolute_time();
-    sts_on_ms = 100;
-    sts_off_ms = 200;
 
     while (true) {
         tud_task();
@@ -99,7 +79,7 @@ int main(void) {
             process_port(port);
         }
 
-        update_status_led();
+        leds_update();
     }
 
     return 0;

@@ -9,14 +9,14 @@
 
 // Port pin assignments
 const coax_port_pins_t port_pins[NUM_PORTS] = {
-    { .pin_rx =  2, .pin_tx =  3, .pin_tx_active =  4, .pin_tx_delay =  5, .pin_led =  8 },
-    { .pin_rx =  9, .pin_tx = 10, .pin_tx_active = 11, .pin_tx_delay = 12, .pin_led = 13 },
-    { .pin_rx = 14, .pin_tx = 15, .pin_tx_active = 16, .pin_tx_delay = 17, .pin_led =  1 },
-    { .pin_rx = 18, .pin_tx = 19, .pin_tx_active = 20, .pin_tx_delay = 21, .pin_led = 28 },
+    { .pin_rx =  2, .pin_tx =  3, .pin_tx_active =  4, .pin_tx_delay =  5 },
+    { .pin_rx =  9, .pin_tx = 10, .pin_tx_active = 11, .pin_tx_delay = 12 },
+    { .pin_rx = 14, .pin_tx = 15, .pin_tx_active = 16, .pin_tx_delay = 17 },
+    { .pin_rx = 18, .pin_tx = 19, .pin_tx_active = 20, .pin_tx_delay = 21 },
 };
 
-// Fixed debug/diagnostic pins for recv_serial set_base
-#define RECV_SET_BASE 6
+// recv_serial has set pin instructions for debug, but those GPIOs are now
+// used for LEDs.  We keep set_count=0 so the instructions are harmless no-ops.
 
 // PIO and SM assignments
 #define RX_PIO  pio0
@@ -50,12 +50,6 @@ void coax_init(void) {
     tx_dma_chan = dma_claim_unused_channel(true);
     rx_dma_chan = dma_claim_unused_channel(true);
 
-    // Init debug/diagnostic pins for recv_serial
-    gpio_init(RECV_SET_BASE);
-    gpio_init(RECV_SET_BASE + 1);
-    gpio_set_dir(RECV_SET_BASE, GPIO_OUT);
-    gpio_set_dir(RECV_SET_BASE + 1, GPIO_OUT);
-
     // Initialize all port pins
     for (int i = 0; i < NUM_PORTS; i++) {
         const coax_port_pins_t *p = &port_pins[i];
@@ -78,11 +72,6 @@ void coax_init(void) {
         gpio_init(p->pin_tx_delay);
         gpio_set_dir(p->pin_tx_delay, GPIO_OUT);
         gpio_put(p->pin_tx_delay, 0);
-
-        // LED — output
-        gpio_init(p->pin_led);
-        gpio_set_dir(p->pin_led, GPIO_OUT);
-        gpio_put(p->pin_led, 0);
     }
 
     // Configure port 0 as default
@@ -123,14 +112,10 @@ void coax_switch_port(int port) {
         sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
         sm_config_set_in_pins(&c, p->pin_rx);
         sm_config_set_jmp_pin(&c, p->pin_rx);
-        sm_config_set_set_pins(&c, RECV_SET_BASE, 2);
+        sm_config_set_set_pins(&c, 0, 0);  // disable set pins (used for debug only)
         float div = (float)clock_get_hz(clk_sys) / PIO_FREQ;
         sm_config_set_clkdiv(&c, div);
 
-        // RX pin is input (PIO reads pads directly), set pins are debug outputs
-        pio_gpio_init(RX_PIO, RECV_SET_BASE);
-        pio_gpio_init(RX_PIO, RECV_SET_BASE + 1);
-        pio_sm_set_consecutive_pindirs(RX_PIO, rx_sm, RECV_SET_BASE, 2, true);
         pio_sm_set_consecutive_pindirs(RX_PIO, rx_sm, p->pin_rx, 1, false);
 
         pio_sm_init(RX_PIO, rx_sm, rx_program_offset, &c);

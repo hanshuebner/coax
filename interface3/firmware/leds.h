@@ -2,12 +2,28 @@
 #define LEDS_H
 
 #include <stdbool.h>
+#include "coax.h"
 
 #define PIN_LED_STS 26
 #define PIN_LED_ERR 27
 
+typedef struct {
+    int pin_tx;
+    int pin_rx;
+} port_leds_t;
+
+extern const port_leds_t port_leds[NUM_PORTS];
+
 void leds_init(void);
-void led_set(int pin, bool on);
 void leds_startup_show(void);
+
+// Call from main loop to update all timed LED state
+void leds_update(void);
+
+// Trigger TX activity LED for a port (stretched to 100ms minimum)
+void led_tx_activity(int port);
+
+// STS LED
+void led_set_sts(bool on);
 
 #endif
