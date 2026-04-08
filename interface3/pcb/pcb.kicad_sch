@@ -4406,6 +4406,16 @@
 		)
 		(uuid "36c2223e-10de-4d30-bf56-284f9d041ab4")
 	)
+	(text "The PCB Rev 2 incorrectly connected TX2 to pin 13 on the Pico, which is GND.\nThe firmware assumes that a hardware patch is made to break the GP10-GP12\ntraces (Pins 14-16) and rewire them according to the corrected  schematic.\nAlso, LED13 needs to be rewired to connect to GP19 and the connection to LED_NET\nmust be disconnected."
+		(exclude_from_sim no)
+		(at 95.504 138.938 0)
+		(effects
+			(font
+				(size 2.0066 2.0066)
+			)
+		)
+		(uuid "b81def6d-d901-4cb6-9826-c375fe46d412")
+	)
 	(text "Indicator LEDs and Mounting Holes"
 		(exclude_from_sim no)
 		(at 24.5618 181.864 0)
@@ -4651,6 +4661,10 @@
 	(no_connect
 		(at 161.036 80.01)
 		(uuid "df3b4ca0-bf3b-4760-aa38-45d0d69b654e")
+	)
+	(no_connect
+		(at 198.12 93.98)
+		(uuid "f3580082-ba65-40fb-851d-d9e824f05f17")
 	)
 	(wire
 		(pts
@@ -5614,16 +5628,6 @@
 	)
 	(wire
 		(pts
-			(xy 124.206 102.87) (xy 125.476 102.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "736edb92-85b6-480f-b7dc-841741728a1f")
-	)
-	(wire
-		(pts
 			(xy 325.882 102.108) (xy 336.042 102.108)
 		)
 		(stroke
@@ -6031,6 +6035,16 @@
 			(type default)
 		)
 		(uuid "a25b2c85-a1d7-461c-a602-c9532c277332")
+	)
+	(wire
+		(pts
+			(xy 106.68 102.87) (xy 125.476 102.87)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3219ef5-8b19-4f83-85c9-aae724ec53b5")
 	)
 	(wire
 		(pts
@@ -6684,6 +6698,16 @@
 	)
 	(wire
 		(pts
+			(xy 198.12 93.98) (xy 200.66 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ef442ee4-97f8-412d-b88e-2f8ddaab45f1")
+	)
+	(wire
+		(pts
 			(xy 385.572 158.242) (xy 385.572 156.972)
 		)
 		(stroke
@@ -6962,7 +6986,7 @@
 			)
 		)
 	)
-	(global_label "LED_RX2"
+	(global_label "TX2_DELAY"
 		(shape output)
 		(at 124.206 110.49 180)
 		(effects
@@ -7122,7 +7146,7 @@
 			)
 		)
 	)
-	(global_label "TX2_ACTIVE"
+	(global_label "~{TX2}"
 		(shape output)
 		(at 124.206 105.41 180)
 		(effects
@@ -7442,22 +7466,23 @@
 			)
 		)
 	)
-	(global_label "~{TX2}"
+	(global_label "LED_NET"
 		(shape output)
-		(at 124.206 102.87 180)
+		(at 200.66 93.98 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify right)
+			(justify left)
 		)
 		(uuid "7854c398-7190-4422-9ac7-18ada05be8a5")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 124.206 102.87 0)
+			(at 200.66 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 				(hide yes)
 			)
 		)
@@ -8102,7 +8127,7 @@
 			)
 		)
 	)
-	(global_label "TX2_DELAY"
+	(global_label "TX2_ACTIVE"
 		(shape output)
 		(at 124.206 107.95 180)
 		(effects
@@ -8242,7 +8267,7 @@
 			)
 		)
 	)
-	(global_label "LED_NET"
+	(global_label "LED_RX2"
 		(shape output)
 		(at 162.306 100.33 0)
 		(effects
@@ -10315,6 +10340,71 @@
 			(project "pcb"
 				(path "/526cd2dc-8794-4bb6-97c2-9b545ee4fe34"
 					(reference "R13")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 106.68 102.87 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "43808fc7-c4cd-4789-8fab-bf5953ea2fe4")
+		(property "Reference" "#PWR039"
+			(at 106.68 109.22 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 106.68 107.315 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 106.68 102.87 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 106.68 102.87 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 106.68 102.87 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e00a4056-3846-40c2-a895-e851a96efdac")
+		)
+		(instances
+			(project "pcb"
+				(path "/526cd2dc-8794-4bb6-97c2-9b545ee4fe34"
+					(reference "#PWR039")
 					(unit 1)
 				)
 			)
