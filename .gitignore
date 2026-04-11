@@ -1,1 +1,3 @@
 interface3/firmware/build/
+interface3/firmware/build-*/
+interface3/coax_interface-*.uf2
