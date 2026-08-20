@@ -1,0 +1,34 @@
+[Unit]
+Description=oec tn3270 session on interface3 coax port 1 (USB CDC if02)
+Documentation=https://github.com/lowobservable/oec
+
+# The interface presents one USB CDC per coax port plus the capture port, so
+# the ttyACM numbers depend on enumeration order and shift whenever the
+# firmware gains or loses an interface.  Bind to the by-id name instead: it
+# names the USB interface and therefore the coax port.  systemd spells the
+# dashes in that path as \x2d -- the unescaped form that "systemd-escape -p"
+# prints resolves to an inactive unit and the binding would never fire.
+BindsTo=dev-serial-by\x2did-usb\x2dcoax\x2dtcp_Coax_Interface_000000\x2dif02.device
+After=dev-serial-by\x2did-usb\x2dcoax\x2dtcp_Coax_Interface_000000\x2dif02.device
+
+[Service]
+Type=simple
+WorkingDirectory=%h/oec
+ExecStart=%h/oec/.venv/bin/python -m oec --clicker --keyboard-language de /dev/serial/by-id/usb-coax-tcp_Coax_Interface_000000-if02 tn3270 veron.classic-computing.de:3270
+
+# Restart oec if it fails on its own.  Unplugging the interface stops the
+# unit through BindsTo rather than failing it, and the WantedBy below starts
+# it again when the device comes back -- which is what happens on every
+# firmware reflash.
+Restart=on-failure
+RestartSec=2
+
+# oec shuts its serial port down cleanly on SIGINT.
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=dev-serial-by\x2did-usb\x2dcoax\x2dtcp_Coax_Interface_000000\x2dif02.device
