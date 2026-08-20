@@ -201,7 +201,27 @@ int coax_encode_tx_buf(const uint8_t *words, int word_count,
     return needed;
 }
 
+// pio_sm_restart() resets the shift counters and the clock divider, but it
+// leaves the program counter where the state machine was stopped and does not
+// touch the FIFOs.  A transaction ends by disabling the state machines while
+// they sit in the middle of their programs, so the next one has to send them
+// back to the top and discard whatever the last one left behind.  This is the
+// tail of pio_sm_init(), which runs only from coax_switch_port() and which
+// that function skips when the port has not changed.
+static void sm_reset(PIO pio, uint sm, uint program_offset) {
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_restart(pio, sm);
+    pio_sm_clkdiv_restart(pio, sm);
+    pio_sm_exec(pio, sm, pio_encode_jmp(program_offset));
+}
+
 static void setup_rx_dma(uint16_t *buf, int count) {
+    // Reset before the DMA is armed, so that a word left in the RX FIFO by
+    // the previous transaction is discarded instead of being transferred
+    // into the fresh buffer.
+    sm_reset(RX_PIO, rx_sm, rx_program_offset);
+
     dma_channel_config c = dma_channel_get_default_config(rx_dma_chan);
     channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
     channel_config_set_read_increment(&c, false);
@@ -214,11 +234,13 @@ static void setup_rx_dma(uint16_t *buf, int count) {
         count,                            // transfer count
         true);                            // start immediately
 
-    pio_sm_restart(RX_PIO, rx_sm);
     pio_sm_set_enabled(RX_PIO, rx_sm, true);
 }
 
 static void setup_tx_dma(const uint32_t *buf, int count) {
+    sm_reset(TX_PIO, tx_delay_sm, tx_delay_program_offset);
+    sm_reset(TX_PIO, tx_sm, tx_program_offset);
+
     dma_channel_config c = dma_channel_get_default_config(tx_dma_chan);
     channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
     channel_config_set_read_increment(&c, true);
@@ -231,9 +253,7 @@ static void setup_tx_dma(const uint32_t *buf, int count) {
         count,                            // transfer count
         true);                            // start immediately
 
-    pio_sm_restart(TX_PIO, tx_delay_sm);
     pio_sm_set_enabled(TX_PIO, tx_delay_sm, true);
-    pio_sm_restart(TX_PIO, tx_sm);
     pio_sm_set_enabled(TX_PIO, tx_sm, true);
 }
 
