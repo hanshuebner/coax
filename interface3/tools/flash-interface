@@ -51,7 +51,12 @@ dev=$(wait_for "$limit" bootloader_device) || {
 }
 echo "Bootloader at $dev"
 
-mount_point=$(udisksctl mount -b "$dev" | sed -e 's/^Mounted .* at //' -e 's/\.$//')
+# A desktop session may have mounted the drive already.
+mount_point=$(lsblk -rno MOUNTPOINT "$dev")
+if [ -z "$mount_point" ]; then
+    mount_point=$(udisksctl mount -b "$dev" | sed -e 's/^Mounted .* at //' -e 's/\.$//')
+fi
+[ -d "$mount_point" ] || { echo "Cannot mount $dev" >&2; exit 1; }
 echo "Copying $(basename "$uf2") to $mount_point"
 cp "$uf2" "$mount_point/"
 sync
