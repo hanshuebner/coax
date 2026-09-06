@@ -261,6 +261,11 @@ static void sm_reset(PIO pio, uint sm, uint program_offset) {
     pio_sm_exec(pio, sm, pio_encode_jmp(program_offset));
 }
 
+// How long the transmit DMA is given to drain into the PIO. A full frame at
+// the line rate is tens of milliseconds; anything beyond this is a state
+// machine that has stopped consuming.
+#define TX_DRAIN_TIMEOUT_MS 500
+
 // Transaction buffers.  The receive buffer has one extra halfword for
 // the end of frame marker (0xffff), the transmit buffer one extra word
 // for the count that leads the frame.
@@ -339,8 +344,19 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
     setup_tx_dma(tx_encoded, tx_count);
 
     // Wait for TX DMA to complete before starting the response timeout,
-    // since large frames (e.g. 80x25 screen) take ~20ms to transmit.
+    // since large frames (e.g. 80x25 screen) take ~20ms to transmit.  The
+    // wait is bounded: the PIO drains the buffer at the line rate, and a
+    // state machine that has stopped consuming would otherwise hold this
+    // loop -- and with it the whole main loop -- for as long as the
+    // interface is powered, which reaches the host as an interface that has
+    // gone silent rather than as a transaction that failed.
+    absolute_time_t tx_deadline = make_timeout_time_ms(TX_DRAIN_TIMEOUT_MS);
     while (dma_channel_is_busy(tx_dma_chan)) {
+        if (time_reached(tx_deadline)) {
+            dma_channel_abort(tx_dma_chan);
+            dma_channel_abort(rx_dma_chan);
+            return COAX_ERROR;
+        }
         tight_loop_contents();
     }
 
