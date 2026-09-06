@@ -3,6 +3,9 @@
 #include "pico/stdlib.h"
 #include "command.h"
 #include "coax.h"
+
+uint32_t interface_commands_handled(void);
+uint32_t interface_responses_written(void);
 #include "capture.h"
 #include "tap.h"
 #include "leds.h"
@@ -19,6 +22,7 @@
 #define INFO_FIRMWARE_VERSION   0x05
 #define INFO_MESSAGE_BUFFER_SIZE 0x06
 #define INFO_FEATURES           0x07
+#define INFO_COUNTERS           0x08
 
 #define FEATURE_PROTOCOL_3299   0x10
 
@@ -62,6 +66,7 @@ static int cmd_info(const uint8_t *buf, int buf_len, uint8_t *out, int out_size)
         out[pos++] = INFO_FIRMWARE_VERSION;
         out[pos++] = INFO_MESSAGE_BUFFER_SIZE;
         out[pos++] = INFO_FEATURES;
+        out[pos++] = INFO_COUNTERS;
         out[pos++] = 0; out[pos++] = 0;
         return pos;
     } else if (query == INFO_HARDWARE_TYPE) {
@@ -93,6 +98,26 @@ static int cmd_info(const uint8_t *buf, int buf_len, uint8_t *out, int out_size)
         out[pos++] = (MAX_FRAME_SIZE >> 16) & 0xff;
         out[pos++] = (MAX_FRAME_SIZE >> 8) & 0xff;
         out[pos++] = MAX_FRAME_SIZE & 0xff;
+        out[pos++] = 0; out[pos++] = 0;
+        return pos;
+    } else if (query == INFO_COUNTERS) {
+        // What the interface has counted since it started: transactions that
+        // gave up waiting for the transmit DMA to drain.
+        uint32_t counters[4] = {
+            interface_commands_handled(),
+            interface_responses_written(),
+            coax_timeout_count(),
+            coax_tx_drain_timeouts(),
+        };
+        int payload_len = 1 + 4 * 4;
+        out[pos++] = 0; out[pos++] = payload_len;
+        out[pos++] = RESPONSE_OK;
+        for (int i = 0; i < 4; i++) {
+            out[pos++] = (counters[i] >> 24) & 0xff;
+            out[pos++] = (counters[i] >> 16) & 0xff;
+            out[pos++] = (counters[i] >> 8) & 0xff;
+            out[pos++] = counters[i] & 0xff;
+        }
         out[pos++] = 0; out[pos++] = 0;
         return pos;
     } else if (query == INFO_FEATURES) {

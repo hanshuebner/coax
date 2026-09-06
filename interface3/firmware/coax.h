@@ -39,6 +39,8 @@ typedef struct {
 #define COAX_ERROR      -2
 
 void coax_init(void);
+uint32_t coax_tx_drain_timeouts(void);
+uint32_t coax_timeout_count(void);
 void coax_switch_port(int port);
 
 // Give up the PIO programs and state machines that carry transactions, so

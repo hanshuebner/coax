@@ -100,6 +100,14 @@ static void process_capture_port(void) {
     capture_task();
 }
 
+// Commands taken off the host and responses written back to it. A host that
+// waited for an answer it never received can be compared against these.
+static uint32_t commands_handled;
+static uint32_t responses_written;
+
+uint32_t interface_commands_handled(void) { return commands_handled; }
+uint32_t interface_responses_written(void) { return responses_written; }
+
 static void process_port(int port) {
     if (!tud_cdc_n_connected(port)) return;
 
@@ -115,6 +123,8 @@ static void process_port(int port) {
     if (!slip_frame_ready(&slip_state[port])) return;
 
     // Process the complete SLIP frame
+    commands_handled++;
+
     int resp_len = command_process(port,
                                    slip_state[port].buf,
                                    slip_state[port].len,
@@ -125,6 +135,7 @@ static void process_port(int port) {
 
     if (resp_len > 0) {
         cdc_send(port, response, resp_len);
+        responses_written++;
     }
 }
 

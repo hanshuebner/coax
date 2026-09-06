@@ -261,6 +261,24 @@ static void sm_reset(PIO pio, uint sm, uint program_offset) {
     pio_sm_exec(pio, sm, pio_encode_jmp(program_offset));
 }
 
+// How many transactions gave up waiting for the transmit DMA. The host reads
+// this, so a stall in that wait is a number rather than something inferred
+// from the shape of the failure at the other end.
+static uint32_t tx_drain_timeouts;
+
+// Transactions where the terminal did not answer within the time the command
+// allowed. The interface still answers the host in that case, so this tells a
+// silent terminal apart from a silent interface.
+static uint32_t coax_timeouts;
+
+uint32_t coax_tx_drain_timeouts(void) {
+    return tx_drain_timeouts;
+}
+
+uint32_t coax_timeout_count(void) {
+    return coax_timeouts;
+}
+
 // How long the transmit DMA is given to drain into the PIO. A full frame at
 // the line rate is tens of milliseconds; anything beyond this is a state
 // machine that has stopped consuming.
@@ -353,8 +371,14 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
     absolute_time_t tx_deadline = make_timeout_time_ms(TX_DRAIN_TIMEOUT_MS);
     while (dma_channel_is_busy(tx_dma_chan)) {
         if (time_reached(tx_deadline)) {
+            tx_drain_timeouts++;
             dma_channel_abort(tx_dma_chan);
             dma_channel_abort(rx_dma_chan);
+            // A state machine stopped mid-frame keeps what it was shifting,
+            // so the next transaction would start on the tail of this one.
+            sm_reset(TX_PIO, tx_delay_sm, tx_delay_program_offset);
+            sm_reset(TX_PIO, tx_sm, tx_program_offset);
+            sm_reset(RX_PIO, rx_sm, rx_program_offset);
             return COAX_ERROR;
         }
         tight_loop_contents();
@@ -393,7 +417,9 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
     dma_channel_abort(tx_dma_chan);
 
     int result = COAX_TIMEOUT;
-    if (receive_count != -1) {
+    if (receive_count == -1) {
+        coax_timeouts++;
+    } else {
         // Copy received data to output buffer (as bytes, little-endian 16-bit words)
         int byte_count = receive_count * 2;
         if (byte_count > rx_buf_size) byte_count = rx_buf_size;
