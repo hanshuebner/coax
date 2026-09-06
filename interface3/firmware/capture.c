@@ -10,7 +10,14 @@
 #include "coax.h"
 #include "slip.h"
 
-#define RING_SIZE 16384
+// Records wait here until USB takes them.  A frame of MAX_FRAME_LENGTH
+// words makes a record of a little over 16 KB before SLIP escaping, and
+// both halves of a transaction are appended at once.
+#if PICO_RP2350
+#define RING_SIZE 65536
+#else
+#define RING_SIZE 32768
+#endif
 #define RING_MASK (RING_SIZE - 1)
 
 #define CAPTURE_FORMAT_VERSION 1

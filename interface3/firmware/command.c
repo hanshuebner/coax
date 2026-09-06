@@ -6,8 +6,11 @@
 #include "capture.h"
 #include "tap.h"
 #include "leds.h"
+#include "slip.h"
 
-#define MAX_FRAME_SIZE   4300
+// Size of the message buffer reported to the host: a transmit/receive
+// command carrying a frame of MAX_FRAME_LENGTH words, with its framing.
+#define MAX_FRAME_SIZE   SLIP_BUF_SIZE
 
 #define INFO_SUPPORTED_QUERIES  0x01
 #define INFO_HARDWARE_TYPE      0x02
@@ -123,10 +126,13 @@ static int cmd_transmit_receive(int port, const uint8_t *buf, int buf_len,
     // Switch PIO to this port
     coax_switch_port(port);
 
-    // Perform transaction
-    uint8_t rx_data[MAX_FRAME_LENGTH * 2];
+    // Receive straight into the response, behind its length and response
+    // code and leaving room for the footer: length(2) + RESPONSE_OK(1) +
+    // rx_data + footer(2).
+    if (out_size < 5) return -1;
+    uint8_t *rx_data = out + 3;
     coax_timing_t timing;
-    int rx_len = coax_transact(coax_words, coax_words_len, rx_data, sizeof(rx_data),
+    int rx_len = coax_transact(coax_words, coax_words_len, rx_data, out_size - 5,
                                timeout_ms, &timing);
 
     // A poll answered by 0x0000 leaves the terminal state unchanged.  A
@@ -171,17 +177,12 @@ static int cmd_transmit_receive(int port, const uint8_t *buf, int buf_len,
         led_tx_activity(port);
     }
 
-    // Build response: length(2) + RESPONSE_OK(1) + rx_data + footer(2)
+    // Complete the response around the received data
     int payload_len = 1 + rx_len;
-    int total = 2 + 1 + rx_len + 2;
-    if (total > out_size) return -1;
-
-    int pos = 0;
-    out[pos++] = (payload_len >> 8) & 0xff;
-    out[pos++] = payload_len & 0xff;
-    out[pos++] = RESPONSE_OK;
-    memcpy(out + pos, rx_data, rx_len);
-    pos += rx_len;
+    out[0] = (payload_len >> 8) & 0xff;
+    out[1] = payload_len & 0xff;
+    out[2] = RESPONSE_OK;
+    int pos = 3 + rx_len;
     out[pos++] = 0; out[pos++] = 0;
     return pos;
 }

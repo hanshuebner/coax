@@ -239,7 +239,7 @@ use for those.
   is left out unless `--idle-polls` is given.  The count of what was
   dropped shows up in Wireshark under *Statistics → Capture File
   Properties*.
-- **Frames longer than 2016 words** are reported with a receive error
+- **Frames longer than 8192 words** are reported with a receive error
   flag rather than in full.
 - The 3299 multiplexer address is not decoded.
 

@@ -391,7 +391,7 @@ class Capture:
         meta = self.meta or {}
         hardware = meta.get("hardware", "unknown")
         firmware = meta.get("firmware", "unknown")
-        max_words = meta.get("max_words", 4096)
+        max_words = meta.get("max_words", 8192)
         num_ports = meta.get("num_ports", NUM_PORTS)
 
         comment = None
@@ -634,7 +634,7 @@ class FakePort:
 
     def _script(self):
         out = []
-        meta = struct.pack("<BBH", 1, 4, 2016) \
+        meta = struct.pack("<BBH", 1, 4, 8192) \
             + bytes([len("interface3")]) + b"interface3" \
             + bytes([len("v1.0")]) + b"v1.0"
         out.append(self._record(REC_META, 1_000_000, meta))

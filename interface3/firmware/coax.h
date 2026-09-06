@@ -4,12 +4,16 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "pico/types.h"
+
 #define NUM_PORTS 4
 
 #define BIT_RATE 2358700
 #define PIO_FREQ (12 * BIT_RATE)
 
-#define MAX_FRAME_LENGTH (80 * 25 + 16)
+// Longest frame carried in one transaction, in coax words.  A DFT
+// terminal exchanges structured fields of up to 8 KB, one byte per word.
+#define MAX_FRAME_LENGTH 8192
 
 // Per-port pin configuration (coax signal pins only)
 typedef struct {

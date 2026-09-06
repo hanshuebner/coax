@@ -23,9 +23,9 @@
 
 // Words decoded by the state machine land here.  The DMA wraps within the
 // ring on its own, which needs a power of two size and matching alignment.
-#define RING_WORDS 4096
+#define RING_WORDS 16384
 #define RING_BYTES (RING_WORDS * 2)
-#define RING_BITS  13
+#define RING_BITS  15
 
 static uint16_t ring[RING_WORDS] __attribute__((aligned(RING_BYTES)));
 static uint32_t ring_read;

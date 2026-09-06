@@ -1,7 +1,8 @@
 #include "slip.h"
-#include <string.h>
 
-void slip_init(slip_state_t *s) {
+void slip_init(slip_state_t *s, uint8_t *buf, int size) {
+    s->buf = buf;
+    s->size = size;
     s->len = 0;
     s->escaped = false;
     s->frame_ready = false;
@@ -32,7 +33,7 @@ void slip_feed(slip_state_t *s, const uint8_t *data, int count) {
             continue;
         }
 
-        if (s->len < SLIP_BUF_SIZE) {
+        if (s->len < s->size) {
             s->buf[s->len++] = b;
         }
     }
@@ -50,31 +51,4 @@ void slip_frame_consume(slip_state_t *s) {
     s->len = 0;
     s->escaped = false;
     s->frame_ready = false;
-}
-
-int slip_encode(const uint8_t *data, int len, uint8_t *out, int out_size) {
-    int pos = 0;
-
-    if (pos >= out_size) return -1;
-    out[pos++] = SLIP_END;
-
-    for (int i = 0; i < len; i++) {
-        if (data[i] == SLIP_END) {
-            if (pos + 2 > out_size) return -1;
-            out[pos++] = SLIP_ESC;
-            out[pos++] = SLIP_ESC_END;
-        } else if (data[i] == SLIP_ESC) {
-            if (pos + 2 > out_size) return -1;
-            out[pos++] = SLIP_ESC;
-            out[pos++] = SLIP_ESC_ESC;
-        } else {
-            if (pos + 1 > out_size) return -1;
-            out[pos++] = data[i];
-        }
-    }
-
-    if (pos >= out_size) return -1;
-    out[pos++] = SLIP_END;
-
-    return pos;
 }

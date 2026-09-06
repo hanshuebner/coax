@@ -261,6 +261,18 @@ static void sm_reset(PIO pio, uint sm, uint program_offset) {
     pio_sm_exec(pio, sm, pio_encode_jmp(program_offset));
 }
 
+// Transaction buffers.  The receive buffer has one extra halfword for
+// the end of frame marker (0xffff), the transmit buffer one extra word
+// for the count that leads the frame.
+static uint16_t rx_dma_buf[MAX_FRAME_LENGTH + 1];
+static uint32_t tx_encoded[MAX_FRAME_LENGTH + 1];
+
+// Number of halfwords the receive DMA has stored so far.
+static int rx_dma_written(void) {
+    uintptr_t next = dma_channel_hw_addr(rx_dma_chan)->write_addr;
+    return (int)((next - (uintptr_t)rx_dma_buf) / sizeof(rx_dma_buf[0]));
+}
+
 static void setup_rx_dma(uint16_t *buf, int count) {
     // Reset before the DMA is armed, so that a word left in the RX FIFO by
     // the previous transaction is discarded instead of being transferred
@@ -316,18 +328,12 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
     }
 
     // Encode TX data
-    int n_words = tx_word_count / 2;
-    uint32_t tx_encoded[n_words + 1];
     int tx_count = coax_encode_tx_buf(tx_words, tx_word_count, tx_encoded,
-                                       n_words + 1);
+                                       MAX_FRAME_LENGTH + 1);
     if (tx_count < 0) return COAX_ERROR;
 
-    // Set up RX buffer — one extra 16-bit word for end marker (0xffff)
-    int rx_halfword_count = MAX_FRAME_LENGTH + 1;
-    uint16_t rx_dma_buf[rx_halfword_count];
-    memset(rx_dma_buf, 0, sizeof(rx_dma_buf));
-
     // Start DMA transfers
+    const int rx_halfword_count = MAX_FRAME_LENGTH + 1;
     setup_rx_dma(rx_dma_buf, rx_halfword_count);
     if (timing) timing->tx_start_us = time_us_64();
     setup_tx_dma(tx_encoded, tx_count);
@@ -338,17 +344,22 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
         tight_loop_contents();
     }
 
-    // Now start the response timeout
+    // Now start the response timeout.  The DMA fills the buffer in order,
+    // so only the words it has written since the last look need checking
+    // for the end of frame marker.
     absolute_time_t deadline = make_timeout_time_ms(timeout_ms);
     int receive_count = -1;
+    int scanned = 0;
 
     while (receive_count == -1 && !time_reached(deadline)) {
-        for (int i = 0; i < MAX_FRAME_LENGTH; i++) {
+        int written = rx_dma_written();
+        for (int i = scanned; i < written; i++) {
             if (rx_dma_buf[i] == 0xffff) {
                 receive_count = i;
                 break;
             }
         }
+        scanned = written;
         if (receive_count == -1) {
             sleep_us(100);
         }
@@ -365,14 +376,20 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
     dma_channel_abort(rx_dma_chan);
     dma_channel_abort(tx_dma_chan);
 
-    if (receive_count == -1) {
-        return COAX_TIMEOUT;
+    int result = COAX_TIMEOUT;
+    if (receive_count != -1) {
+        // Copy received data to output buffer (as bytes, little-endian 16-bit words)
+        int byte_count = receive_count * 2;
+        if (byte_count > rx_buf_size) byte_count = rx_buf_size;
+        memcpy(rx_buf, rx_dma_buf, byte_count);
+        result = byte_count;
     }
 
-    // Copy received data to output buffer (as bytes, little-endian 16-bit words)
-    int byte_count = receive_count * 2;
-    if (byte_count > rx_buf_size) byte_count = rx_buf_size;
-    memcpy(rx_buf, rx_dma_buf, byte_count);
+    // Clear what this transaction stored, so the next one never mistakes
+    // a leftover end marker for its own.
+    int written = rx_dma_written();
+    if (written > rx_halfword_count) written = rx_halfword_count;
+    memset(rx_dma_buf, 0, written * sizeof(rx_dma_buf[0]));
 
-    return byte_count;
+    return result;
 }
