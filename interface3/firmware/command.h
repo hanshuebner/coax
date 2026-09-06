@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#define HARDWARE_TYPE    "interface3"
+#define FIRMWARE_VERSION "v1.0"
+
 #define COMMAND_RESET             0x01
 #define COMMAND_TRANSMIT_RECEIVE  0x06
 #define COMMAND_INFO              0xF0

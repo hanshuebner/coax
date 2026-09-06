@@ -3,10 +3,10 @@
 #include "pico/stdlib.h"
 #include "command.h"
 #include "coax.h"
+#include "capture.h"
+#include "tap.h"
 #include "leds.h"
 
-#define HARDWARE_TYPE    "interface3"
-#define FIRMWARE_VERSION "v1.0"
 #define MAX_FRAME_SIZE   4300
 
 #define INFO_SUPPORTED_QUERIES  0x01
@@ -116,12 +116,44 @@ static int cmd_transmit_receive(int port, const uint8_t *buf, int buf_len,
 
     if (coax_words_len < 2) return make_error(out, out_size, ERROR_INVALID_MESSAGE, "no words");
 
+    if (!coax_available() || tap_port() == port) {
+        return make_error(out, out_size, 105, "port is listening");
+    }
+
     // Switch PIO to this port
     coax_switch_port(port);
 
     // Perform transaction
     uint8_t rx_data[MAX_FRAME_LENGTH * 2];
-    int rx_len = coax_transact(coax_words, coax_words_len, rx_data, sizeof(rx_data), timeout_ms);
+    coax_timing_t timing;
+    int rx_len = coax_transact(coax_words, coax_words_len, rx_data, sizeof(rx_data),
+                               timeout_ms, &timing);
+
+    // A poll answered by 0x0000 leaves the terminal state unchanged.  A
+    // terminal is polled continuously, so captures leave those out unless
+    // they are asked for.
+    bool is_empty_poll = (rx_len == 2 && rx_data[0] == 0 && rx_data[1] == 0);
+    bool is_idle_poll = is_empty_poll && coax_words_len == 2;
+
+    if (capture_port_active(port)) {
+        if (is_idle_poll && !capture_wants_idle_polls(port)) {
+            capture_count_idle_poll(port);
+        } else if (rx_len == COAX_TIMEOUT) {
+            if (capture_wants_timeouts(port)) {
+                capture_frame(port, 0, coax_words, coax_words_len / 2, timing.tx_start_us);
+                capture_frame(port, CAPTURE_FLAG_FROM_TERMINAL | CAPTURE_FLAG_TIMEOUT,
+                              NULL, 0, timing.rx_end_us);
+            }
+        } else if (rx_len < 0) {
+            capture_frame(port, 0, coax_words, coax_words_len / 2, timing.tx_start_us);
+            capture_frame(port, CAPTURE_FLAG_FROM_TERMINAL | CAPTURE_FLAG_RX_ERROR,
+                          NULL, 0, timing.rx_end_us);
+        } else {
+            capture_frame(port, 0, coax_words, coax_words_len / 2, timing.tx_start_us);
+            capture_frame(port, CAPTURE_FLAG_FROM_TERMINAL, rx_data, rx_len / 2,
+                          timing.rx_end_us);
+        }
+    }
 
     if (rx_len == COAX_TIMEOUT) {
         led_set_terminal_connected(port, false);
@@ -135,7 +167,6 @@ static int cmd_transmit_receive(int port, const uint8_t *buf, int buf_len,
     led_set_terminal_connected(port, true);
 
     // Flash TX LED on successful transact, skip empty polls (0x0000)
-    bool is_empty_poll = (rx_len == 2 && rx_data[0] == 0 && rx_data[1] == 0);
     if (!is_empty_poll) {
         led_tx_activity(port);
     }

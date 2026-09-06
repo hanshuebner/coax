@@ -34,8 +34,10 @@ static int tx_dma_chan;
 static int rx_dma_chan;
 
 static int current_port = -1;
+static bool programs_loaded;
+static int release_depth;
 
-void coax_init(void) {
+static void claim_pio(void) {
     // Claim state machines
     rx_sm = pio_claim_unused_sm(RX_PIO, true);
     tx_sm = pio_claim_unused_sm(TX_PIO, true);
@@ -45,6 +47,23 @@ void coax_init(void) {
     rx_program_offset = pio_add_program(RX_PIO, &recv_serial_program);
     tx_program_offset = pio_add_program(TX_PIO, &xmit_serial_program);
     tx_delay_program_offset = pio_add_program(TX_PIO, &xmit_serial_delay_program);
+
+    programs_loaded = true;
+}
+
+static void idle_port_pins(int port) {
+    const coax_port_pins_t *p = &port_pins[port];
+    const uint pins[] = { p->pin_tx, p->pin_tx_active, p->pin_tx_delay };
+
+    for (int i = 0; i < 3; i++) {
+        gpio_set_function(pins[i], GPIO_FUNC_SIO);
+        gpio_set_dir(pins[i], GPIO_OUT);
+        gpio_put(pins[i], 0);
+    }
+}
+
+void coax_init(void) {
+    claim_pio();
 
     // Claim DMA channels
     tx_dma_chan = dma_claim_unused_channel(true);
@@ -78,9 +97,46 @@ void coax_init(void) {
     coax_switch_port(0);
 }
 
+void coax_release(void) {
+    if (release_depth++ > 0) return;
+    if (!programs_loaded) return;
+
+    pio_sm_set_enabled(RX_PIO, rx_sm, false);
+    pio_sm_set_enabled(TX_PIO, tx_sm, false);
+    pio_sm_set_enabled(TX_PIO, tx_delay_sm, false);
+
+    if (current_port >= 0) {
+        idle_port_pins(current_port);
+    }
+
+    pio_remove_program(RX_PIO, &recv_serial_program, rx_program_offset);
+    pio_remove_program(TX_PIO, &xmit_serial_program, tx_program_offset);
+    pio_remove_program(TX_PIO, &xmit_serial_delay_program, tx_delay_program_offset);
+
+    pio_sm_unclaim(RX_PIO, rx_sm);
+    pio_sm_unclaim(TX_PIO, tx_sm);
+    pio_sm_unclaim(TX_PIO, tx_delay_sm);
+
+    programs_loaded = false;
+    current_port = -1;
+}
+
+void coax_restore(void) {
+    if (release_depth > 0 && --release_depth > 0) return;
+    if (programs_loaded) return;
+
+    claim_pio();
+    coax_switch_port(0);
+}
+
+bool coax_available(void) {
+    return programs_loaded;
+}
+
 void coax_switch_port(int port) {
     if (port < 0 || port >= NUM_PORTS) return;
     if (port == current_port) return;
+    if (!programs_loaded) return;
 
     const coax_port_pins_t *p = &port_pins[port];
 
@@ -91,18 +147,7 @@ void coax_switch_port(int port) {
 
     // If switching away from a port, return previous pins to GPIO
     if (current_port >= 0) {
-        const coax_port_pins_t *prev = &port_pins[current_port];
-        gpio_set_function(prev->pin_tx, GPIO_FUNC_SIO);
-        gpio_set_dir(prev->pin_tx, GPIO_OUT);
-        gpio_put(prev->pin_tx, 0);
-
-        gpio_set_function(prev->pin_tx_active, GPIO_FUNC_SIO);
-        gpio_set_dir(prev->pin_tx_active, GPIO_OUT);
-        gpio_put(prev->pin_tx_active, 0);
-
-        gpio_set_function(prev->pin_tx_delay, GPIO_FUNC_SIO);
-        gpio_set_dir(prev->pin_tx_delay, GPIO_OUT);
-        gpio_put(prev->pin_tx_delay, 0);
+        idle_port_pins(current_port);
     }
 
     // Configure recv_serial (RX) SM
@@ -258,9 +303,17 @@ static void setup_tx_dma(const uint32_t *buf, int count) {
 }
 
 int coax_transact(const uint8_t *tx_words, int tx_word_count,
-                  uint8_t *rx_buf, int rx_buf_size, int timeout_ms) {
+                  uint8_t *rx_buf, int rx_buf_size, int timeout_ms,
+                  coax_timing_t *timing) {
+    if (!programs_loaded) return COAX_ERROR;
+
     // Enforce minimum timeout
     if (timeout_ms < 5) timeout_ms = 5;
+
+    if (timing) {
+        timing->tx_start_us = time_us_64();
+        timing->rx_end_us = timing->tx_start_us;
+    }
 
     // Encode TX data
     int n_words = tx_word_count / 2;
@@ -276,6 +329,7 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
 
     // Start DMA transfers
     setup_rx_dma(rx_dma_buf, rx_halfword_count);
+    if (timing) timing->tx_start_us = time_us_64();
     setup_tx_dma(tx_encoded, tx_count);
 
     // Wait for TX DMA to complete before starting the response timeout,
@@ -299,6 +353,8 @@ int coax_transact(const uint8_t *tx_words, int tx_word_count,
             sleep_us(100);
         }
     }
+
+    if (timing) timing->rx_end_us = time_us_64();
 
     // Disable state machines
     pio_sm_set_enabled(RX_PIO, rx_sm, false);

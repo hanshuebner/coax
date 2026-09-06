@@ -144,6 +144,10 @@ Replace `/dev/tty.usbmodem*` with the actual device path (e.g.,
 `/dev/tty.usbmodem1124101` on macOS, `/dev/ttyACM0` on Linux, or
 `COM3` on Windows).
 
+The interface presents five serial ports: one per coax port, followed
+by the capture port.  Name the port you want explicitly rather than
+relying on a glob.
+
 #### Accessing the Python REPL
 
 During startup, the firmware provides a 5-second window to access the
@@ -183,6 +187,47 @@ it will automatically connect to the configured server.
 
 See the [TCP Protocol documentation](./TCP_PROTOCOL.md) for details on
 the network protocol.
+
+### Capturing Coax Traffic
+
+The interface can record the coax traffic it exchanges with attached
+terminals and hand it to Wireshark.  Capture happens in the firmware,
+so both directions of every transaction are recorded as they appear on
+the wire, with microsecond timestamps.
+
+Records leave the device on a fifth USB serial port named `Coax
+Capture`, which the four command ports are unaffected by.  Write a
+capture file with:
+
+```bash
+tools/coax-capture --write coax.pcapng
+```
+
+To capture from the Wireshark GUI, install the capture plugin and the
+dissector once:
+
+```bash
+tools/install-wireshark.sh
+```
+
+Idle polls are left out unless `--idle-polls` is given, since a
+terminal is polled continuously.  See the [capture
+documentation](./CAPTURE.md) for the record format, the filtering
+options and the pcapng layout.
+
+The interface can also record a link between some other controller and
+a terminal, either sitting in the middle of it and forwarding between
+two ports, or listening on one:
+
+```bash
+tools/coax-capture --forward 0,1 --write link.pcapng
+tools/coax-capture --tap 0 --write tap.pcapng
+```
+
+See [Passive Capture](./PASSIVE-CAPTURE.md) for how to connect the
+interface to a link and what to expect.  Forwarding needs a second coax
+port that can transmit; boards built from the earlier layout need the
+rework described in [PCB Rework](./PCB-REWORK.md).
 
 ## LED Indicators
 

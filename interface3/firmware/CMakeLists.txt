@@ -14,6 +14,9 @@ add_executable(coax_interface
     coax.c
     slip.c
     command.c
+    capture.c
+    tap.c
+    forward.c
     leds.c
     usb_descriptors.c
 )

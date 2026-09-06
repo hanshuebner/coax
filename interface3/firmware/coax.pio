@@ -117,3 +117,97 @@ end_frame:
 wait_idle:
     jmp pin, wait_idle
     set pins, 0b00
+
+
+; recv_tap: Manchester decoder for a line the interface does not drive
+;
+; The same decoder as recv_serial, without the handshake that keeps the
+; receiver out of the interface's own transmission.  It runs continuously
+; and decodes every frame on the line, whichever end sent it.  Frames are
+; terminated by a 0xffffffff word in the FIFO, as in recv_serial.
+;
+; Pin mapping:
+;   in_base  = RX pin
+;   jmp_pin  = RX pin
+;   set_base = debug pins (2 pins, optional)
+
+.program recv_tap
+.wrap_target
+start0:
+    wait 1 pin 0              ; wait for quiescent bit
+start1:
+    wait 0 pin 0
+    set pins, 0b01
+    set pins, 0b00
+    jmp pin, start1    [3]    ; expect zero half bit
+    jmp pin, start1    [5]    ; expect zero half bit
+    jmp pin, start1    [5]    ; expect zero half bit
+    jmp pin, vio10     [5]
+    jmp start0
+vio10:
+    jmp pin, vio11     [4]
+    jmp start0
+vio11:
+    jmp pin, vio12
+    jmp start0
+vio12:
+    set pins, 0b11
+    set x, 9                  ; 10 bits to read
+    ; wait for the beginning of the sync bit
+    wait 0 pin 0
+    ; we are 1/4 bit into the sync/end bit
+word_loop:
+    jmp pin, end_frame
+    ; sync on the rising edge of the sync bit
+    wait 1 pin 0       [12]
+    ; we are 3/4 bits into the first data bit
+bit_loop:
+    in pins, 1                ; read bit, wait for next
+    set pins, 0b10
+    set pins, 0b11     [8]
+    jmp x--, bit_loop
+    ; looking at the parity bit now
+    mov x, pins        [3]
+    set x, 9                  ; 10 bits to read
+    jmp word_loop              ; looking at 1/4 of sync/end again
+end_frame:
+    set x, 0
+    mov isr, ~x
+    push
+wait_idle:
+    jmp pin, wait_idle
+    set pins, 0b00
+.wrap
+
+
+; repeat_line: regenerate what arrives on one port onto another port
+;
+; The line is sampled at the system clock and written straight back out, so
+; a frame crosses the interface in a few tens of nanoseconds rather than
+; being decoded and sent on.  Transmission on the destination port is held
+; on from the first active bit until the source line has been quiet for the
+; number of sample periods loaded into Y, and the source port's own
+; transmitter output keeps the pair running in one direction at a time.
+;
+; Pin mapping:
+;   in_base  = source RX pin (pin 2 of the group is its TX_ACTIVE)
+;   jmp_pin  = source RX pin
+;   out_base = destination TX pin (1 pin)
+;   set_base = destination TX_ACTIVE pin (1 pin)
+
+.program repeat_line
+    pull block
+    mov y, osr                ; quiet period, in sample periods
+.wrap_target
+idle:
+    set pins, 0               ; destination transmitter off
+    wait 0 pin 2              ; hold off while this line is ours to drive
+    wait 1 pin 0              ; the far end has started sending
+    set pins, 1               ; destination transmitter on
+reload:
+    mov x, y
+loop:
+    mov pins, pins            ; put this line out on the destination
+    jmp pin, reload           ; the line is still active
+    jmp x--, loop
+.wrap

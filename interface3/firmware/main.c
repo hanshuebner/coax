@@ -6,9 +6,12 @@
 #include "coax.h"
 #include "slip.h"
 #include "command.h"
+#include "capture.h"
+#include "tap.h"
 #include "leds.h"
 
-static slip_state_t slip_state[NUM_PORTS];
+// One SLIP decoder per command port, plus one for the capture port.
+static slip_state_t slip_state[NUM_PORTS + 1];
 
 static void cdc_send(int port, const uint8_t *data, int len) {
     uint8_t slip_buf[SLIP_BUF_SIZE * 2];
@@ -27,6 +30,29 @@ static void cdc_send(int port, const uint8_t *data, int len) {
         }
         tud_task();
     }
+}
+
+// Capture control commands arrive as SLIP frames on the capture port.
+static void process_capture_port(void) {
+    slip_state_t *s = &slip_state[CAPTURE_CDC_PORT];
+
+    if (tud_cdc_n_connected(CAPTURE_CDC_PORT)) {
+        int avail = tud_cdc_n_available(CAPTURE_CDC_PORT);
+        if (avail > 0) {
+            uint8_t tmp[64];
+            int count = tud_cdc_n_read(CAPTURE_CDC_PORT, tmp, sizeof(tmp));
+            if (count > 0) {
+                slip_feed(s, tmp, count);
+            }
+        }
+
+        if (slip_frame_ready(s)) {
+            capture_control(s->buf, s->len);
+            slip_frame_consume(s);
+        }
+    }
+
+    capture_task();
 }
 
 static void process_port(int port) {
@@ -67,8 +93,9 @@ int main(void) {
     tusb_init();
 
     coax_init();
+    capture_init();
 
-    for (int i = 0; i < NUM_PORTS; i++) {
+    for (int i = 0; i < NUM_PORTS + 1; i++) {
         slip_init(&slip_state[i]);
     }
 
@@ -78,6 +105,9 @@ int main(void) {
         for (int port = 0; port < NUM_PORTS; port++) {
             process_port(port);
         }
+
+        process_capture_port();
+        tap_task();
 
         leds_update();
     }

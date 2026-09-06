@@ -16,6 +16,7 @@ enum {
     STRID_CDC1,
     STRID_CDC2,
     STRID_CDC3,
+    STRID_CAPTURE,
 };
 
 // Endpoint numbers — each CDC needs 2 endpoints (notification IN + data IN/OUT)
@@ -24,6 +25,7 @@ enum {
 //   CDC1: notif=0x83, out=0x04, in=0x84
 //   CDC2: notif=0x85, out=0x06, in=0x86
 //   CDC3: notif=0x87, out=0x08, in=0x88
+//   CDC4: notif=0x89, out=0x0A, in=0x8A  (capture)
 
 #define EPNUM_CDC0_NOTIF 0x81
 #define EPNUM_CDC0_OUT   0x02
@@ -40,6 +42,10 @@ enum {
 #define EPNUM_CDC3_NOTIF 0x87
 #define EPNUM_CDC3_OUT   0x08
 #define EPNUM_CDC3_IN    0x88
+
+#define EPNUM_CDC4_NOTIF 0x89
+#define EPNUM_CDC4_OUT   0x0A
+#define EPNUM_CDC4_IN    0x8A
 
 // Device descriptor
 tusb_desc_device_t const desc_device = {
@@ -64,15 +70,16 @@ uint8_t const *tud_descriptor_device_cb(void) {
 }
 
 // Configuration descriptor
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 4 * TUD_CDC_DESC_LEN)
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 5 * TUD_CDC_DESC_LEN)
 
 uint8_t const desc_configuration[] = {
-    TUD_CONFIG_DESCRIPTOR(1, 8, 0, CONFIG_TOTAL_LEN, 0x00, 100),
+    TUD_CONFIG_DESCRIPTOR(1, 10, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
     TUD_CDC_DESCRIPTOR(0, STRID_CDC0, EPNUM_CDC0_NOTIF, 8, EPNUM_CDC0_OUT, EPNUM_CDC0_IN, 64),
     TUD_CDC_DESCRIPTOR(2, STRID_CDC1, EPNUM_CDC1_NOTIF, 8, EPNUM_CDC1_OUT, EPNUM_CDC1_IN, 64),
     TUD_CDC_DESCRIPTOR(4, STRID_CDC2, EPNUM_CDC2_NOTIF, 8, EPNUM_CDC2_OUT, EPNUM_CDC2_IN, 64),
     TUD_CDC_DESCRIPTOR(6, STRID_CDC3, EPNUM_CDC3_NOTIF, 8, EPNUM_CDC3_OUT, EPNUM_CDC3_IN, 64),
+    TUD_CDC_DESCRIPTOR(8, STRID_CAPTURE, EPNUM_CDC4_NOTIF, 8, EPNUM_CDC4_OUT, EPNUM_CDC4_IN, 64),
 };
 
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
@@ -90,6 +97,7 @@ static char const *string_desc_arr[] = {
     [STRID_CDC1]         = "Coax Port 2",
     [STRID_CDC2]         = "Coax Port 3",
     [STRID_CDC3]         = "Coax Port 4",
+    [STRID_CAPTURE]      = "Coax Capture",
 };
 
 static uint16_t desc_str[32 + 1];

@@ -1,0 +1,902 @@
+#!/usr/bin/env python3
+"""Capture coax traffic from an interface3 device and write it as pcapng.
+
+Runs standalone or as a Wireshark extcap plugin.  See CAPTURE.md for the
+record format and the on-disk link-layer format.
+"""
+
+import argparse
+import errno
+import fcntl
+import glob
+import os
+import re
+import select
+import signal
+import struct
+import sys
+import termios
+import time
+
+# Record types
+REC_FRAME = 1
+REC_META = 2
+REC_DROP = 3
+REC_STATUS = 4
+
+# Link-layer flags
+FLAG_FROM_TERMINAL = 0x01
+FLAG_TRUNCATED = 0x02
+FLAG_TIMEOUT = 0x04
+FLAG_RX_ERROR = 0x08
+FLAG_INFERRED = 0x10
+
+# Control commands
+CMD_START = 0x01
+CMD_STOP = 0x02
+CMD_STATUS = 0x03
+CMD_TAP = 0x04
+CMD_FORWARD = 0x05
+
+# Capture options
+OPT_IDLE_POLLS = 0x01
+OPT_TIMEOUTS = 0x02
+
+# SLIP
+SLIP_END = 0xC0
+SLIP_ESC = 0xDB
+SLIP_ESC_END = 0xDC
+SLIP_ESC_ESC = 0xDD
+
+LINKTYPE_USER0 = 147
+NUM_PORTS = 4
+RECORD_PREFIX_LEN = 13
+
+APPLICATION = "coax-capture"
+
+
+# ---------------------------------------------------------------- serial port
+
+
+class SerialPort:
+    """A CDC ACM port in raw mode, without a pyserial dependency."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            iflag, oflag, cflag, lflag, ispeed, ospeed, cc = termios.tcgetattr(self.fd)
+        except termios.error as e:
+            os.close(self.fd)
+            raise IOError("%s is not a serial port: %s" % (path, e))
+
+        cflag |= termios.CLOCAL | termios.CREAD
+        cflag &= ~(termios.CSIZE | termios.PARENB | termios.CSTOPB)
+        cflag |= termios.CS8
+        cc = list(cc)
+        cc[termios.VMIN] = 0
+        cc[termios.VTIME] = 0
+        termios.tcsetattr(self.fd, termios.TCSANOW,
+                          [0, 0, cflag, 0, ispeed, ospeed, cc])
+        termios.tcflush(self.fd, termios.TCIOFLUSH)
+
+        # The firmware sends capture records only while the host asserts
+        # DTR, which not every platform does on open.
+        try:
+            fcntl.ioctl(self.fd, termios.TIOCMBIS,
+                        struct.pack("I", termios.TIOCM_DTR | termios.TIOCM_RTS))
+        except (AttributeError, OSError):
+            pass
+
+    def read(self, timeout):
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        if not ready:
+            return b""
+        try:
+            return os.read(self.fd, 65536)
+        except OSError as e:
+            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                return b""
+            raise
+
+    def write(self, data):
+        view = memoryview(data)
+        while view:
+            try:
+                written = os.write(self.fd, view)
+                view = view[written:]
+            except OSError as e:
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    select.select([], [self.fd], [], 1.0)
+                    continue
+                raise
+
+    def close(self):
+        if self.fd is not None:
+            # Give the last command a moment to leave, since closing can
+            # discard whatever has not been sent yet.
+            time.sleep(0.05)
+            os.close(self.fd)
+            self.fd = None
+
+
+def slip_encode(payload):
+    out = bytearray()
+    for b in payload:
+        if b == SLIP_END:
+            out += bytes([SLIP_ESC, SLIP_ESC_END])
+        elif b == SLIP_ESC:
+            out += bytes([SLIP_ESC, SLIP_ESC_ESC])
+        else:
+            out.append(b)
+    out.append(SLIP_END)
+    return bytes(out)
+
+
+class SlipDecoder:
+    def __init__(self):
+        self.buf = bytearray()
+
+    def feed(self, data):
+        self.buf += data
+        frames = []
+        while True:
+            end = self.buf.find(bytes([SLIP_END]))
+            if end < 0:
+                break
+            chunk = bytes(self.buf[:end])
+            del self.buf[:end + 1]
+            if chunk:
+                frames.append(chunk.replace(bytes([SLIP_ESC, SLIP_ESC_END]),
+                                            bytes([SLIP_END]))
+                                   .replace(bytes([SLIP_ESC, SLIP_ESC_ESC]),
+                                            bytes([SLIP_ESC])))
+        return frames
+
+
+# ------------------------------------------------------------------- records
+
+
+class Record:
+    __slots__ = ("type", "ts_us", "incl_len", "orig_len", "body")
+
+    def __init__(self, type_, ts_us, incl_len, orig_len, body):
+        self.type = type_
+        self.ts_us = ts_us
+        self.incl_len = incl_len
+        self.orig_len = orig_len
+        self.body = body
+
+
+def parse_record(frame):
+    if len(frame) < RECORD_PREFIX_LEN:
+        return None
+    type_, ts_us, incl_len, orig_len = struct.unpack_from("<BQHH", frame, 0)
+    return Record(type_, ts_us, incl_len, orig_len, frame[RECORD_PREFIX_LEN:])
+
+
+def parse_meta(body):
+    if len(body) < 4:
+        return {}
+    version, num_ports, max_words = struct.unpack_from("<BBH", body, 0)
+    pos = 4
+    strings = []
+    for _ in range(2):
+        if pos >= len(body):
+            strings.append("")
+            continue
+        length = body[pos]
+        pos += 1
+        strings.append(body[pos:pos + length].decode("ascii", "replace"))
+        pos += length
+    return {
+        "version": version,
+        "num_ports": num_ports,
+        "max_words": max_words,
+        "hardware": strings[0],
+        "firmware": strings[1],
+    }
+
+
+def parse_drop(body):
+    if len(body) < 4:
+        return 0, [0] * NUM_PORTS
+    total = struct.unpack_from("<I", body, 0)[0]
+    per_port = list(struct.unpack_from("<%dI" % NUM_PORTS, body, 4)) \
+        if len(body) >= 4 + 4 * NUM_PORTS else [0] * NUM_PORTS
+    return total, per_port
+
+
+def parse_status(body):
+    want = 5 + 4 + 3 * 4 * NUM_PORTS
+    if len(body) < want:
+        return None
+    capturing, port_mask, options, snap_words, dropped = struct.unpack_from("<BBBHI", body, 0)
+    pos = 9
+    captured = list(struct.unpack_from("<%dI" % NUM_PORTS, body, pos))
+    pos += 4 * NUM_PORTS
+    suppressed = list(struct.unpack_from("<%dI" % NUM_PORTS, body, pos))
+    pos += 4 * NUM_PORTS
+    dropped_port = list(struct.unpack_from("<%dI" % NUM_PORTS, body, pos))
+    pos += 4 * NUM_PORTS
+    tap = body[pos] if len(body) > pos else 0xFF
+    forward = (body[pos + 1], body[pos + 2]) if len(body) > pos + 2 else (0xFF, 0xFF)
+    quiet = struct.unpack_from("<H", body, pos + 3)[0] if len(body) > pos + 4 else 0
+    return {
+        "capturing": bool(capturing),
+        "port_mask": port_mask,
+        "options": options,
+        "snap_words": snap_words,
+        "dropped": dropped,
+        "captured": captured,
+        "suppressed": suppressed,
+        "dropped_port": dropped_port,
+        "tap_port": None if tap == 0xFF else tap,
+        "forward": None if forward[0] == 0xFF else forward,
+        "quiet_ns": quiet,
+    }
+
+
+# ------------------------------------------------------------------- pcapng
+
+
+def _option(code, value):
+    padded = value + b"\x00" * (-len(value) % 4)
+    return struct.pack("<HH", code, len(value)) + padded
+
+
+def _block(block_type, body):
+    total = len(body) + 12
+    return struct.pack("<II", block_type, total) + body + struct.pack("<I", total)
+
+
+class PcapngWriter:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def _write(self, data):
+        self.stream.write(data)
+        self.stream.flush()
+
+    def section_header(self, hardware, os_name, application, comment=None):
+        body = struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1)
+        if comment:
+            body += _option(1, comment.encode())
+        if hardware:
+            body += _option(2, hardware.encode())
+        if os_name:
+            body += _option(3, os_name.encode())
+        if application:
+            body += _option(4, application.encode())
+        body += _option(0, b"")
+        self._write(_block(0x0A0D0D0A, body))
+
+    def interface(self, name, description, snaplen, speed=None):
+        body = struct.pack("<HHI", LINKTYPE_USER0, 0, snaplen)
+        body += _option(2, name.encode())
+        body += _option(3, description.encode())
+        if speed:
+            body += _option(8, struct.pack("<Q", speed))
+        body += _option(9, b"\x06")  # if_tsresol: microseconds
+        body += _option(0, b"")
+        self._write(_block(0x00000001, body))
+
+    def packet(self, interface_id, ts_us, data, orig_len, flags):
+        padded = data + b"\x00" * (-len(data) % 4)
+        body = struct.pack("<IIIII", interface_id, ts_us >> 32, ts_us & 0xFFFFFFFF,
+                           len(data), orig_len) + padded
+        body += _option(2, struct.pack("<I", flags))  # epb_flags
+        body += _option(0, b"")
+        self._write(_block(0x00000006, body))
+
+    def stats(self, interface_id, ts_us, start_us, end_us, received, dropped, comment=None):
+        body = struct.pack("<III", interface_id, ts_us >> 32, ts_us & 0xFFFFFFFF)
+        if comment:
+            body += _option(1, comment.encode())
+        body += _option(2, struct.pack("<II", start_us >> 32, start_us & 0xFFFFFFFF))
+        body += _option(3, struct.pack("<II", end_us >> 32, end_us & 0xFFFFFFFF))
+        body += _option(4, struct.pack("<Q", received))
+        body += _option(5, struct.pack("<Q", dropped))
+        body += _option(0, b"")
+        self._write(_block(0x00000005, body))
+
+    def comment_packet(self, interface_id, ts_us, text):
+        """A zero-length frame carrying a note, used for device resets."""
+        header = struct.pack(">BBBBH", 1, interface_id, 0, 0xFF, 0)
+        padded = header + b"\x00" * (-len(header) % 4)
+        body = struct.pack("<IIIII", interface_id, ts_us >> 32, ts_us & 0xFFFFFFFF,
+                           len(header), len(header)) + padded
+        body += _option(1, text.encode())
+        body += _option(0, b"")
+        self._write(_block(0x00000006, body))
+
+
+# ------------------------------------------------------------------- capture
+
+
+class Capture:
+    """Drives one capture session from a device port to a pcapng stream."""
+
+    META_TIMEOUT = 2.0
+
+    def __init__(self, port, writer, port_mask, options, snap_words, tap=None,
+                 forward=None, invert=False, quiet_ns=0, log=None):
+        self.port = port
+        self.writer = writer
+        self.port_mask = port_mask
+        self.options = options
+        self.snap_words = snap_words
+        self.tap = tap
+        self.forward = forward
+        self.invert = invert
+        self.quiet_ns = quiet_ns
+        self.log = log or (lambda msg: None)
+
+        self.decoder = SlipDecoder()
+        self.meta = None
+        self.header_written = False
+        self.anchor_us = None
+        self.last_dev_us = None
+        self.first_epoch_us = None
+        self.last_epoch_us = None
+        self.received = [0] * NUM_PORTS
+        self.dropped = [0] * NUM_PORTS
+        self.status = None
+        self.stopping = False
+
+    # -- device control
+
+    def start(self):
+        self.port.write(slip_encode(bytes([CMD_START, self.port_mask, self.options])
+                                    + struct.pack("<H", self.snap_words)))
+        if self.forward is not None:
+            self.port.write(slip_encode(bytes([CMD_FORWARD, self.forward[0],
+                                               self.forward[1], 1,
+                                               1 if self.invert else 0])
+                                        + struct.pack("<H", self.quiet_ns)))
+        if self.tap is not None:
+            self.port.write(slip_encode(bytes([CMD_TAP, self.tap, 1])))
+
+    def request_status(self):
+        self.port.write(slip_encode(bytes([CMD_STATUS])))
+
+    def stop(self):
+        try:
+            if self.tap is not None:
+                self.port.write(slip_encode(bytes([CMD_TAP, self.tap, 0])))
+            self.port.write(slip_encode(bytes([CMD_STOP])))
+        except OSError:
+            pass
+
+    # -- timestamps
+
+    def to_epoch_us(self, dev_us):
+        if self.anchor_us is None:
+            self.anchor_us = int(time.time() * 1_000_000) - dev_us
+        elif self.last_dev_us is not None and dev_us < self.last_dev_us:
+            # The device counts from boot, so time running backwards means
+            # it was reset.  Anchor again to the host clock.
+            self.anchor_us = int(time.time() * 1_000_000) - dev_us
+            if self.header_written:
+                self.writer.comment_packet(0, self.anchor_us + dev_us,
+                                           "device reset, timestamps re-anchored")
+        self.last_dev_us = dev_us
+        return self.anchor_us + dev_us
+
+    # -- pcapng header
+
+    def write_header(self):
+        if self.header_written:
+            return
+        meta = self.meta or {}
+        hardware = meta.get("hardware", "unknown")
+        firmware = meta.get("firmware", "unknown")
+        max_words = meta.get("max_words", 4096)
+        num_ports = meta.get("num_ports", NUM_PORTS)
+
+        comment = None
+        if self.forward is not None:
+            comment = ("forwarding between coax ports %d and %d, listening on "
+                       "port %d; frame direction is inferred from the first word"
+                       % (self.forward[0], self.forward[1], self.tap))
+        elif self.tap is not None:
+            comment = ("listening on coax port %d; frame direction is inferred "
+                       "from the first word" % self.tap)
+
+        self.writer.section_header(
+            "%s %s" % (hardware, firmware),
+            " ".join(os.uname()[0:3:2]),
+            APPLICATION,
+            comment=comment)
+        for port in range(num_ports):
+            self.writer.interface("coax%d" % port,
+                                  "Coax port %d (%s)" % (port + 1, hardware),
+                                  6 + 2 * max_words,
+                                  speed=2358700)
+        self.header_written = True
+
+    # -- records
+
+    def handle(self, record):
+        if record.type == REC_META:
+            self.meta = parse_meta(record.body)
+            self.log("device %s %s, %d ports, up to %d words per frame"
+                     % (self.meta.get("hardware"), self.meta.get("firmware"),
+                        self.meta.get("num_ports", 0), self.meta.get("max_words", 0)))
+            self.write_header()
+            return
+
+        if record.type == REC_DROP:
+            total, per_port = parse_drop(record.body)
+            self.dropped = per_port
+            self.log("device dropped %d records" % total)
+            self.write_stats(self.to_epoch_us(record.ts_us))
+            return
+
+        if record.type == REC_STATUS:
+            self.status = parse_status(record.body)
+            if self.status:
+                if self.tap is not None and self.status["tap_port"] != self.tap:
+                    self.log("device did not start listening on port %d" % self.tap)
+                if self.forward is not None:
+                    if self.status["forward"] != self.forward:
+                        self.log("device did not start forwarding between ports "
+                                 "%d and %d" % self.forward)
+                    elif self.status["quiet_ns"]:
+                        self.log("forwarding releases a line after %d ns of quiet"
+                                 % self.status["quiet_ns"])
+            return
+
+        if record.type != REC_FRAME:
+            return
+
+        if len(record.body) < 6:
+            return
+
+        self.write_header()
+
+        port = record.body[1]
+        flags = record.body[2]
+        if port >= NUM_PORTS:
+            return
+
+        epoch_us = self.to_epoch_us(record.ts_us)
+        if self.first_epoch_us is None:
+            self.first_epoch_us = epoch_us
+        self.last_epoch_us = epoch_us
+
+        # epb_flags direction is seen from the capturing device: a frame
+        # from the terminal is inbound, one to the terminal is outbound.
+        direction = 1 if flags & FLAG_FROM_TERMINAL else 2
+        self.writer.packet(port, epoch_us, record.body, record.orig_len, direction)
+        self.received[port] += 1
+
+    def write_stats(self, ts_us):
+        if not self.header_written:
+            return
+        suppressed = self.status["suppressed"] if self.status else None
+        for port in range(NUM_PORTS):
+            comment = None
+            if suppressed and suppressed[port]:
+                comment = "%d idle polls suppressed" % suppressed[port]
+            self.writer.stats(port, ts_us,
+                              self.first_epoch_us or ts_us,
+                              self.last_epoch_us or ts_us,
+                              self.received[port], self.dropped[port],
+                              comment)
+
+    # -- main loop
+
+    def run(self, duration=None):
+        self.start()
+        started = time.time()
+        deadline = started + duration if duration else None
+
+        while not self.stopping:
+            if deadline and time.time() >= deadline:
+                break
+
+            data = self.port.read(0.1)
+            if data:
+                for frame in self.decoder.feed(data):
+                    record = parse_record(frame)
+                    if record:
+                        self.handle(record)
+
+            if not self.header_written and time.time() - started > self.META_TIMEOUT:
+                self.log("no capture device answered on %s, continuing anyway"
+                         % getattr(self.port, "path", "the port"))
+                self.write_header()
+
+        self.finish()
+
+    def finish(self):
+        self.request_status()
+        deadline = time.time() + 0.5
+        while time.time() < deadline and self.status is None:
+            data = self.port.read(0.1)
+            for frame in self.decoder.feed(data):
+                record = parse_record(frame)
+                if record:
+                    self.handle(record)
+
+        if self.status:
+            self.dropped = self.status["dropped_port"]
+
+        self.stop()
+        self.write_header()
+        self.write_stats(int(time.time() * 1_000_000))
+
+
+# ------------------------------------------------------- device enumeration
+
+
+def _linux_capture_ports():
+    found = []
+    for path in sorted(glob.glob("/sys/class/tty/ttyACM*")):
+        name = os.path.basename(path)
+        try:
+            with open(os.path.join(path, "device", "interface")) as f:
+                interface = f.read().strip()
+        except OSError:
+            continue
+        if interface == "Coax Capture":
+            found.append(("/dev/" + name, interface))
+    return found
+
+
+def _macos_capture_ports():
+    # The CDC interfaces of one device share a name prefix and differ in the
+    # trailing interface number; the capture interface is the last one.
+    groups = {}
+    for path in sorted(glob.glob("/dev/cu.usbmodem*")):
+        match = re.match(r"(/dev/cu\.usbmodem\w*?)(\d\d)$", path)
+        if not match:
+            continue
+        groups.setdefault(match.group(1), []).append((int(match.group(2)), path))
+
+    found = []
+    for prefix, members in sorted(groups.items()):
+        if len(members) < 5:
+            continue
+        members.sort()
+        found.append((members[-1][1], "Coax Capture (assumed)"))
+    return found
+
+
+def _pyserial_capture_ports():
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return None
+
+    found = []
+    for info in list_ports.comports():
+        interface = getattr(info, "interface", None) or ""
+        product = getattr(info, "product", None) or ""
+        if interface == "Coax Capture" or (product == "Coax Interface"
+                                           and "Capture" in interface):
+            found.append((info.device, interface))
+    return found or None
+
+
+def detect_capture_ports():
+    found = _pyserial_capture_ports()
+    if found:
+        return found
+    if sys.platform.startswith("linux"):
+        return _linux_capture_ports()
+    if sys.platform == "darwin":
+        return _macos_capture_ports()
+    return []
+
+
+def resolve_port(requested):
+    if requested and requested != "auto":
+        return requested
+    found = detect_capture_ports()
+    if not found:
+        raise SystemExit("no coax capture port found; name one with --port")
+    if len(found) > 1:
+        raise SystemExit("several coax capture ports found (%s); pick one with --port"
+                         % ", ".join(p for p, _ in found))
+    return found[0][0]
+
+
+# ---------------------------------------------------------------- self test
+
+
+class FakePort:
+    """A canned device, so the pcapng output can be checked without hardware."""
+
+    path = "<self-test>"
+
+    def __init__(self):
+        self.written = []
+        self.records = self._script()
+
+    @staticmethod
+    def _record(type_, ts_us, body, orig_len=None):
+        prefix = struct.pack("<BQHH", type_, ts_us, len(body),
+                             len(body) if orig_len is None else orig_len)
+        return slip_encode(prefix + body)
+
+    @staticmethod
+    def _data_word(byte):
+        ones = bin(byte).count("1")
+        parity = 0 if ones % 2 else 1
+        return (byte << 2) | (parity << 1)
+
+    @staticmethod
+    def _frame(port, flags, words):
+        body = struct.pack(">BBBBH", 1, port, flags, 0xFF, len(words))
+        return body + b"".join(struct.pack(">H", w) for w in words)
+
+    def _script(self):
+        out = []
+        meta = struct.pack("<BBH", 1, 4, 2016) \
+            + bytes([len("interface3")]) + b"interface3" \
+            + bytes([len("v1.0")]) + b"v1.0"
+        out.append(self._record(REC_META, 1_000_000, meta))
+
+        # A poll answered by a keystroke, then a write of two data words
+        # acknowledged by a transmission turnaround.
+        out.append(self._record(REC_FRAME, 1_100_000, self._frame(0, 0, [0x0005])))
+        out.append(self._record(REC_FRAME, 1_100_240,
+                                self._frame(0, FLAG_FROM_TERMINAL, [0x0602])))
+        out.append(self._record(REC_FRAME, 1_200_000,
+                                self._frame(0, 0, [0x0031,
+                                                   self._data_word(0x93),
+                                                   self._data_word(0xA4)])))
+        out.append(self._record(REC_FRAME, 1_200_500,
+                                self._frame(0, FLAG_FROM_TERMINAL, [0x0000])))
+
+        # A transaction on port 2 that timed out.
+        out.append(self._record(REC_FRAME, 1_300_000, self._frame(2, 0, [0x0005])))
+        out.append(self._record(REC_FRAME, 1_310_000,
+                                self._frame(2, FLAG_FROM_TERMINAL | FLAG_TIMEOUT, [])))
+
+        # A truncated frame, cut to two of ten words.
+        truncated = self._frame(1, FLAG_TRUNCATED, [0x0031, self._data_word(0x93)])
+        out.append(self._record(REC_FRAME, 1_400_000, truncated, orig_len=6 + 2 * 10))
+
+        drop = struct.pack("<I", 3) + struct.pack("<4I", 1, 0, 2, 0)
+        out.append(self._record(REC_DROP, 1_500_000, drop))
+        return out
+
+    def read(self, timeout):
+        if self.records:
+            return self.records.pop(0)
+        return b""
+
+    def write(self, data):
+        self.written.append(data)
+
+    def close(self):
+        pass
+
+
+def run_self_test(out):
+    port = FakePort()
+    writer = PcapngWriter(out)
+    capture = Capture(port, writer, 0x0F, OPT_TIMEOUTS, 0,
+                      log=lambda msg: print(msg, file=sys.stderr))
+    capture.run(duration=0.5)
+
+
+# ------------------------------------------------------------------- extcap
+
+
+def extcap_interfaces():
+    print("extcap {version=1.0}{display=IBM 3270 coax}"
+          "{help=https://github.com/hanshuebner/coax-tcp}")
+    for path, description in detect_capture_ports():
+        print("interface {value=%s}{display=Coax capture on %s}" % (path, path))
+
+
+def extcap_dlts():
+    print("dlt {number=%d}{name=USER0}{display=IBM 3270 coax}" % LINKTYPE_USER0)
+
+
+def extcap_config():
+    print("arg {number=0}{call=--ports}{display=Coax ports}"
+          "{tooltip=Ports to capture, comma separated}{type=string}{default=0,1,2,3}")
+    print("arg {number=1}{call=--idle-polls}{display=Include idle polls}"
+          "{tooltip=Record polls answered by 0x0000}{type=boolflag}{default=false}")
+    print("arg {number=2}{call=--no-timeouts}{display=Omit timed out transactions}"
+          "{type=boolflag}{default=false}")
+    print("arg {number=3}{call=--snap-words}{display=Truncate frames to words}"
+          "{tooltip=0 captures whole frames}{type=integer}{range=0,4096}{default=0}")
+    print("arg {number=4}{call=--tap}{display=Listen on coax port}"
+          "{tooltip=Record a line the interface does not drive; leave empty to "
+          "capture the interface's own traffic}{type=selector}{required=false}")
+    print("value {arg=4}{value=}{display=off}{default=true}")
+    for port in range(NUM_PORTS):
+        print("value {arg=4}{value=%d}{display=coax port %d}" % (port, port + 1))
+    print("arg {number=5}{call=--forward}{display=Forward between coax ports}"
+          "{tooltip=Sit in the middle of a link and record what passes}"
+          "{type=selector}{required=false}")
+    print("value {arg=5}{value=}{display=off}{default=true}")
+    for a in range(NUM_PORTS):
+        for b in range(NUM_PORTS):
+            if a < b:
+                print("value {arg=5}{value=%d,%d}{display=coax ports %d and %d}"
+                      % (a, b, a + 1, b + 1))
+    print("arg {number=6}{call=--invert}{display=Invert the forwarded signal}"
+          "{type=boolflag}{default=false}")
+
+
+# --------------------------------------------------------------------- main
+
+
+def parse_port_mask(text):
+    mask = 0
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        port = int(part)
+        if port < 0 or port >= NUM_PORTS:
+            raise SystemExit("port %d is out of range" % port)
+        mask |= 1 << port
+    if mask == 0:
+        raise SystemExit("no ports selected")
+    return mask
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--port", default="auto",
+                        help="capture serial port, or auto to detect it")
+    parser.add_argument("--write", "-w", default="-",
+                        help="pcapng output file, or - for standard output")
+    parser.add_argument("--ports", default="0,1,2,3",
+                        help="coax ports to capture, comma separated")
+    parser.add_argument("--idle-polls", action="store_true",
+                        help="record polls answered by 0x0000")
+    parser.add_argument("--no-timeouts", action="store_true",
+                        help="leave out transactions that timed out")
+    parser.add_argument("--snap-words", type=int, default=0,
+                        help="truncate frames to this many words")
+    parser.add_argument("--tap", metavar="PORT",
+                        help="listen to a line the interface does not drive, "
+                             "port 0 to 3 as in --ports")
+    parser.add_argument("--forward", metavar="A,B",
+                        help="sit in the middle of a link, forwarding between "
+                             "two ports and recording what passes; forwarding "
+                             "stays up until --forward off")
+    parser.add_argument("--invert", action="store_true",
+                        help="invert the forwarded signal")
+    parser.add_argument("--quiet-ns", type=int, default=0, metavar="NS",
+                        help="how long a forwarded line stays quiet before its "
+                             "transmitter is released (default 1000)")
+    parser.add_argument("--duration", type=float,
+                        help="stop after this many seconds")
+    parser.add_argument("--list", action="store_true",
+                        help="list capture ports and exit")
+    parser.add_argument("--self-test", action="store_true",
+                        help="write a synthetic capture, for checking the format")
+    parser.add_argument("--quiet", "-q", action="store_true",
+                        help="no progress messages")
+
+    extcap = parser.add_argument_group("extcap")
+    extcap.add_argument("--extcap-interfaces", action="store_true")
+    extcap.add_argument("--extcap-dlts", action="store_true")
+    extcap.add_argument("--extcap-config", action="store_true")
+    extcap.add_argument("--extcap-interface")
+    extcap.add_argument("--extcap-version", nargs="?")
+    extcap.add_argument("--capture", action="store_true")
+    extcap.add_argument("--fifo")
+    return parser
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
+
+    if args.extcap_interfaces:
+        extcap_interfaces()
+        return 0
+    if args.extcap_dlts:
+        extcap_dlts()
+        return 0
+    if args.extcap_config:
+        extcap_config()
+        return 0
+    if args.list:
+        found = detect_capture_ports()
+        if not found:
+            print("no coax capture port found", file=sys.stderr)
+            return 1
+        for path, description in found:
+            print("%s\t%s" % (path, description))
+        return 0
+
+    target = args.fifo if args.capture else args.write
+    if target in (None, "-"):
+        stream = sys.stdout.buffer
+        close_stream = False
+    else:
+        stream = open(target, "wb")
+        close_stream = True
+
+    log = (lambda msg: None) if args.quiet else \
+        (lambda msg: print(msg, file=sys.stderr))
+
+    try:
+        if args.self_test:
+            run_self_test(stream)
+            return 0
+
+        path = resolve_port(args.extcap_interface or args.port)
+        port = SerialPort(path)
+        log("%s %s" % ("talking to" if args.forward == "off" else "capturing from",
+                       path))
+
+        options = OPT_IDLE_POLLS if args.idle_polls else 0
+        if not args.no_timeouts:
+            options |= OPT_TIMEOUTS
+
+        # Forwarding carries the link, so it stays up between captures and
+        # is taken down on its own.
+        if args.forward == "off":
+            port.write(slip_encode(bytes([CMD_FORWARD, 0, 0, 0, 0])
+                                   + struct.pack("<H", 0)))
+            port.close()
+            log("forwarding stopped")
+            return 0
+
+        # The extcap selector passes an empty value when a choice is off.
+        forward = None
+        if args.forward not in (None, "", "off"):
+            try:
+                a, b = (int(part) for part in args.forward.split(","))
+            except ValueError:
+                raise SystemExit("--forward takes two ports, as in --forward 0,1")
+            if not (0 <= a < NUM_PORTS and 0 <= b < NUM_PORTS) or a == b:
+                raise SystemExit("--forward needs two different ports, 0 to %d"
+                                 % (NUM_PORTS - 1))
+            forward = (a, b)
+            log("forwarding between coax ports %d and %d" % forward)
+
+        tap = None
+        if args.tap not in (None, "", "off"):
+            tap = int(args.tap)
+            if tap < 0 or tap >= NUM_PORTS:
+                raise SystemExit("tap port %s is out of range" % args.tap)
+            log("listening on coax port %d" % tap)
+        elif forward is not None:
+            # Both ends of the link appear on both wires, so one listener
+            # records the whole conversation.
+            tap = forward[0]
+            log("listening on coax port %d" % tap)
+
+        port_mask = parse_port_mask(args.ports)
+        if tap is not None:
+            port_mask |= 1 << tap
+
+        capture = Capture(port, PcapngWriter(stream),
+                          port_mask, options,
+                          args.snap_words, tap=tap, forward=forward,
+                          invert=args.invert, quiet_ns=args.quiet_ns, log=log)
+
+        def request_stop(signum, frame):
+            capture.stopping = True
+
+        signal.signal(signal.SIGINT, request_stop)
+        signal.signal(signal.SIGTERM, request_stop)
+
+        try:
+            capture.run(duration=args.duration)
+        except (BrokenPipeError, KeyboardInterrupt):
+            capture.stop()
+        finally:
+            port.close()
+        return 0
+    finally:
+        if close_stream:
+            stream.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
