@@ -92,6 +92,17 @@ operate only on full frames.
    The install script will upload all required files and configure
    the device for the selected mode.
 
+### Updating the Firmware
+
+The firmware restarts the Pico into its USB bootloader when any of its
+serial ports is opened at 1200 baud, so a new image can be loaded from
+the host it is attached to.  `tools/flash-interface <image.uf2>` does
+this end to end: it triggers the restart, waits for the bootloader's
+USB drive, copies the image onto it and waits for the interface to come
+back.  A board whose firmware predates that hook is put into the
+bootloader by hand once, by holding BOOTSEL while pressing reset; the
+script waits for it.
+
 ### Serial Mode Setup
 
 After running `./install.sh serial`, the device is ready to use.

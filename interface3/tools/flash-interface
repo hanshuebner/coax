@@ -1,0 +1,64 @@
+#!/bin/sh
+# Load a UF2 image into an attached interface3.
+#
+# The firmware restarts into the RP2040's USB bootloader when one of its
+# CDC ports is opened at 1200 baud.  The bootloader shows up as a USB
+# mass storage device, so the image is copied onto it; the chip restarts
+# with the new firmware as soon as the copy is complete.
+#
+# When no interface is attached, the script waits for a bootloader device
+# to appear, so a board without that hook can be put into the bootloader
+# by hand: hold BOOTSEL and press reset.
+#
+# Usage: flash-interface <image.uf2>
+
+set -eu
+
+uf2=${1:?usage: flash-interface <image.uf2>}
+[ -r "$uf2" ] || { echo "cannot read $uf2" >&2; exit 1; }
+
+by_id=/dev/serial/by-id
+port_glob="$by_id/usb-coax-tcp_Coax_Interface_*-if00"
+
+bootloader_device() {
+    lsblk -rno NAME,LABEL | awk '$2 == "RPI-RP2" || $2 == "RP2350" { print "/dev/" $1; exit }'
+}
+
+wait_for() {
+    # wait_for <seconds> <command...>: poll until the command prints something
+    limit=$1; shift
+    i=0
+    while [ "$i" -lt "$limit" ]; do
+        out=$("$@") && [ -n "$out" ] && { echo "$out"; return 0; }
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+port=$(ls $port_glob 2>/dev/null | head -1 || true)
+if [ -n "$port" ]; then
+    echo "Restarting $port into the bootloader"
+    stty -F "$port" 1200 2>/dev/null || true
+else
+    echo "No interface attached; waiting for a bootloader device (hold BOOTSEL, press reset)"
+fi
+limit=${FLASH_WAIT:-300}
+
+dev=$(wait_for "$limit" bootloader_device) || {
+    echo "No bootloader device appeared" >&2
+    exit 1
+}
+echo "Bootloader at $dev"
+
+mount_point=$(udisksctl mount -b "$dev" | sed -e 's/^Mounted .* at //' -e 's/\.$//')
+echo "Copying $(basename "$uf2") to $mount_point"
+cp "$uf2" "$mount_point/"
+sync
+udisksctl unmount -b "$dev" >/dev/null 2>&1 || true
+
+port=$(wait_for 20 sh -c "ls $port_glob 2>/dev/null | head -1") || {
+    echo "The interface did not come back" >&2
+    exit 1
+}
+echo "Interface is back at $port"

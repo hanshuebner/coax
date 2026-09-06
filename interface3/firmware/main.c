@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "tusb.h"
 
 #include "coax.h"
@@ -62,6 +63,18 @@ static void cdc_send(int port, const uint8_t *data, int len) {
     }
     chunk[pos++] = SLIP_END;
     cdc_write_all(port, chunk, pos);
+}
+
+// Opening any CDC port at 1200 baud restarts the chip in its USB
+// bootloader, so new firmware can be loaded without reaching the board.
+// The command protocol never sets a baud rate, so nothing else trips it.
+#define BOOTLOADER_BAUD_RATE 1200
+
+void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
+    (void)itf;
+    if (coding->bit_rate == BOOTLOADER_BAUD_RATE) {
+        reset_usb_boot(0, 0);
+    }
 }
 
 // Capture control commands arrive as SLIP frames on the capture port.
