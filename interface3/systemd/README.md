@@ -15,7 +15,10 @@ firmware gains or loses an interface.  The units name the ports through
 session follows its coax port rather than a device number.  That also makes
 the sessions come back by themselves after a firmware reflash: the device
 disappears, `BindsTo=` stops the unit, and `WantedBy=` starts it again when
-the interface re-enumerates.
+the interface re-enumerates.  The device's wants fire on udev events only,
+and an interface that is already plugged in when the user manager starts
+raises none, so the units are also wanted by `default.target` to start at
+boot.
 
 Note that systemd writes the dashes of that device path as `\x2d`.  The
 unescaped spelling printed by `systemd-escape -p` names a unit that does not

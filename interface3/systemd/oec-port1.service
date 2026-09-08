@@ -31,4 +31,9 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
+# The device's wants fire on a udev event, which covers the interface being
+# plugged in or coming back from a reflash.  An interface that is already
+# there when the user manager starts raises no event, so the session target
+# pulls the unit in at boot as well.
 WantedBy=dev-serial-by\x2did-usb\x2dcoax\x2dtcp_Coax_Interface_000000\x2dif00.device
+WantedBy=default.target
