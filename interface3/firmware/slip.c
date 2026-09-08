@@ -8,9 +8,9 @@ void slip_init(slip_state_t *s, uint8_t *buf, int size) {
     s->frame_ready = false;
 }
 
-void slip_feed(slip_state_t *s, const uint8_t *data, int count) {
+int slip_feed(slip_state_t *s, const uint8_t *data, int count) {
     for (int i = 0; i < count; i++) {
-        if (s->frame_ready) return;  // don't overwrite a pending frame
+        if (s->frame_ready) return i;
 
         uint8_t b = data[i];
 
@@ -37,6 +37,7 @@ void slip_feed(slip_state_t *s, const uint8_t *data, int count) {
             s->buf[s->len++] = b;
         }
     }
+    return count;
 }
 
 bool slip_frame_ready(const slip_state_t *s) {

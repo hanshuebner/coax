@@ -58,7 +58,7 @@ static int cmd_info(const uint8_t *buf, int buf_len, uint8_t *out, int out_size)
     int pos = 0;
 
     if (query == INFO_SUPPORTED_QUERIES) {
-        int payload_len = 6;
+        int payload_len = 7;
         out[pos++] = 0; out[pos++] = payload_len;
         out[pos++] = RESPONSE_OK;
         out[pos++] = INFO_SUPPORTED_QUERIES;

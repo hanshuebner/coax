@@ -86,14 +86,14 @@ static void process_capture_port(void) {
         if (avail > 0) {
             uint8_t tmp[64];
             int count = tud_cdc_n_read(CAPTURE_CDC_PORT, tmp, sizeof(tmp));
-            if (count > 0) {
-                slip_feed(s, tmp, count);
+            int fed = 0;
+            while (fed < count) {
+                fed += slip_feed(s, tmp + fed, count - fed);
+                if (slip_frame_ready(s)) {
+                    capture_control(s->buf, s->len);
+                    slip_frame_consume(s);
+                }
             }
-        }
-
-        if (slip_frame_ready(s)) {
-            capture_control(s->buf, s->len);
-            slip_frame_consume(s);
         }
     }
 
@@ -118,24 +118,30 @@ static void process_port(int port) {
     int count = tud_cdc_n_read(port, tmp, sizeof(tmp));
     if (count <= 0) return;
 
-    slip_feed(&slip_state[port], tmp, count);
+    // A read may hold the end of one frame and the start of the next, so
+    // what the decoder leaves unread is fed again once the frame it
+    // completed has been handled.
+    int fed = 0;
+    while (fed < count) {
+        fed += slip_feed(&slip_state[port], tmp + fed, count - fed);
 
-    if (!slip_frame_ready(&slip_state[port])) return;
+        if (!slip_frame_ready(&slip_state[port])) return;
 
-    // Process the complete SLIP frame
-    commands_handled++;
+        // Process the complete SLIP frame
+        commands_handled++;
 
-    int resp_len = command_process(port,
-                                   slip_state[port].buf,
-                                   slip_state[port].len,
-                                   response,
-                                   sizeof(response));
+        int resp_len = command_process(port,
+                                       slip_state[port].buf,
+                                       slip_state[port].len,
+                                       response,
+                                       sizeof(response));
 
-    slip_frame_consume(&slip_state[port]);
+        slip_frame_consume(&slip_state[port]);
 
-    if (resp_len > 0) {
-        cdc_send(port, response, resp_len);
-        responses_written++;
+        if (resp_len > 0) {
+            cdc_send(port, response, resp_len);
+            responses_written++;
+        }
     }
 }
 

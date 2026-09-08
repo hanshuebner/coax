@@ -28,7 +28,10 @@ typedef struct {
 } slip_state_t;
 
 void slip_init(slip_state_t *s, uint8_t *buf, int size);
-void slip_feed(slip_state_t *s, const uint8_t *data, int count);
+// Decode bytes into the frame buffer.  Decoding stops once a frame is
+// complete, so bytes that follow it stay unread; the return value is the
+// number consumed, and the rest belongs to the next frame.
+int slip_feed(slip_state_t *s, const uint8_t *data, int count);
 bool slip_frame_ready(const slip_state_t *s);
 int slip_frame_len(const slip_state_t *s);
 void slip_frame_consume(slip_state_t *s);
